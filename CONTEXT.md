@@ -65,6 +65,7 @@ midterm/
 │   ├── stress.sh       # 併發 10+ client 證明
 │   └── demo_robust.sh  # 強健性對照示範
 └── docs/               # 截圖、pcap、報告素材
+    └── dev-log/        # 每階段開發紀錄（stage-0.md、stage-1.md …）
 ```
 
 ### B3. 功能範圍（最小）
@@ -205,6 +206,14 @@ void log_write(int level, const char *file, int line, const char *fmt, ...);
    - Server：`./server [-p port] [-k shift] [-v level] [-t timeout_sec]`
    - Client：`./client [-h host] [-p port] [-k shift] [-v level] [--hold sec] <command...>`
 8. 完成標準（Definition of Done）：B3–B12 全部滿足，並能在**另一台乾淨的電腦**上用 `make` 一次編譯、直接執行 demo。
+9. **Git 自動提交與推送**：上一次的專案修改，在我**下次提出開發請求時**自動 commit 並 push 到 GitHub（`origin/main`）。
+   - 若我在該次請求中**提及任何問題**（錯誤、不符預期、要修改），則**不 commit、不 push**，先處理問題。
+   - commit 前須先實際編譯驗證通過；commit 訊息以英文撰寫，標明階段。
+10. **每階段開發紀錄**：每完成一個階段，在 `docs/dev-log/stage-<N>.md` 建立一份文件，包含：
+    - **這次建立的檔案**：檔案清單、用途、驗收指令與實際輸出。
+    - **為什麼這樣寫（含運作原理）**：設計理由，以及背後的系統 / 網路運作原理（例如 fork 後的 fd、信號遞送、動態連結器載入流程等）。
+    - 這些紀錄同時是最終報告的素材。
+11. **最終報告形式**：書面報告 **PDF**；**英文為主、中文為輔**（正文以英文撰寫，關鍵術語或段落可附中文說明）。
 
 ---
 
@@ -224,6 +233,10 @@ void log_write(int level, const char *file, int line, const char *fmt, ...);
 
 ## Part F：交付物檢查清單
 
+> 報告形式：書面報告 **PDF**，英文為主、中文為輔（見 Part D 第 11 點）。素材來源：`docs/dev-log/`。
+
+- [ ] 書面報告 PDF（英文為主、中文為輔）
+- [ ] 每階段開發紀錄 `docs/dev-log/stage-0.md` ～ `stage-8.md`
 - [ ] 系統設計說明（架構圖、協定格式、流程圖）
 - [ ] 關鍵程式碼說明（fork、`.so`、log、強健性、凱薩）
 - [ ] 截圖：10+ 併發證明
