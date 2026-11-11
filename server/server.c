@@ -1,17 +1,20 @@
 /*
- * 階段 1：最小 echo server（無 fork、無加密）
+ * 階段 2：迭代式 echo server，改用 libutil.so 的 recv_line / send_line 與 log
  *
  * 流程：socket → setsockopt(SO_REUSEADDR) → bind → listen → 迴圈 accept
  *       → 對該 client 反覆「讀一行、回同一行」→ client 關閉後 close，回到 accept
  *
- * 這是「迭代式（iterative）server」：一次只服務一個 client，
- * 第二個 client 會卡在 listen 佇列裡，直到第一個斷線。階段 3 才用 fork() 解決。
+ * 仍是「迭代式」server：一次只服務一個 client。階段 3 才用 fork() 解決。
+ *
+ * Log 等級：
+ *   執行期：環境變數 LOG_LEVEL=0|1|2，或 -v level（-v 優先）
+ *   編譯期：make DEBUG=1 才會把 LOG_D 編進執行檔
  */
 #include <arpa/inet.h>   /* inet_ntop, htons, ntohs */
 #include <errno.h>
 #include <netinet/in.h>  /* sockaddr_in, INADDR_ANY */
 #include <stdio.h>
-#include <stdlib.h>      /* atoi, exit */
+#include <stdlib.h>      /* strtol */
 #include <string.h>      /* strerror, memset */
 #include <sys/socket.h>
 #include <unistd.h>      /* close, getopt */
@@ -22,43 +25,16 @@
 #define DEFAULT_PORT 9000   /* Makefile 會用 -DDEFAULT_PORT 覆寫 */
 #endif
 
-#define MAX_LINE 1024       /* 單行上限（含 '\n'），見 CONTEXT.md B4 */
-#define BACKLOG  16         /* listen 佇列長度，見 B8 */
+#define BACKLOG 16          /* listen 佇列長度，見 CONTEXT.md B8 */
 
-/*
- * 讀一行（到 '\n' 為止）。
- *
- * 為什麼一次只讀 1 個 byte？
- * TCP 是「位元組串流」，沒有訊息邊界：client 送兩行，server 可能一次 recv 就全部收到，
- * 也可能一行被拆成好幾次收到。一次讀 1 byte 最直觀，保證不會多讀到下一行的內容。
- * 缺點是每個 byte 都要一次系統呼叫，效率差；階段 2 會換成 libutil 的 recv_line（帶緩衝）。
- *
- * 回傳：行長度（含 '\n'）；0 = 對方已關閉；-1 = 錯誤或超過上限。
- */
-static ssize_t read_line_simple(int fd, char *buf, size_t maxlen)
+/* 解析 0~max 的整數參數；格式錯誤回傳 -1 */
+static int parse_int(const char *s, int max)
 {
-    size_t n = 0;
-    while (n < maxlen - 1) {             /* 保留 1 byte 給結尾的 '\0' */
-        char c;
-        ssize_t r = recv(fd, &c, 1, 0);
-        if (r == 0)                      /* 對方正常關閉（送了 FIN），不是錯誤 */
-            return (n == 0) ? 0 : -1;    /* 行讀到一半就斷線，視為不完整 */
-        if (r < 0) {
-            if (errno == EINTR)          /* 被信號中斷，重試即可 */
-                continue;
-            fprintf(stderr, "[server] recv: %s\n", strerror(errno));
-            return -1;
-        }
-        buf[n++] = c;
-        if (c == '\n')
-            break;
-    }
-    buf[n] = '\0';
-    if (n > 0 && buf[n - 1] != '\n') {   /* 塞滿了還沒看到 '\n' → 超長 */
-        fprintf(stderr, "[server] line too long (> %d bytes)\n", MAX_LINE - 1);
+    char *end;
+    long v = strtol(s, &end, 10);
+    if (s[0] == '\0' || *end != '\0' || v < 0 || v > max)
         return -1;
-    }
-    return (ssize_t)n;
+    return (int)v;
 }
 
 /* 服務單一 client：讀一行，原樣送回，直到對方關閉。 */
@@ -67,27 +43,35 @@ static void handle_client(int connfd, const char *peer)
     char line[MAX_LINE];
     ssize_t n;
 
-    while ((n = read_line_simple(connfd, line, sizeof(line))) > 0) {
-        /* 印 log 時去掉 '\n'，只是為了顯示好看；送回的內容維持原樣 */
-        printf("[server] %s recv: %.*s\n", peer, (int)(n - 1), line);
+    for (;;) {
+        n = recv_line(connfd, line, sizeof(line));
+        if (n == 0) {
+            LOG_D("%s sent FIN", peer);
+            return;
+        }
+        if (n < 0) {
+            if (errno == EMSGSIZE)
+                LOG_E("%s line too long (> %d bytes), closing", peer, MAX_LINE - 1);
+            else
+                LOG_E("%s recv_line: %s", peer, strerror(errno));
+            return;
+        }
 
-        /* 階段 1 簡化：假設一次 send 就送完。
-         * 實際上 send 可能只送出一部分（short write），階段 2 用 send_all 處理。 */
-        ssize_t s = send(connfd, line, (size_t)n, 0);
-        if (s < 0) {
-            fprintf(stderr, "[server] send: %s\n", strerror(errno));
+        line[n - 1] = '\0';   /* 去掉 '\n'：協定層的邊界，不是內容的一部分 */
+        LOG_I("%s recv: %s", peer, line);
+        LOG_D("%s recv %zd bytes (incl. newline)", peer, n);
+
+        if (send_line(connfd, line) < 0) {
+            LOG_E("%s send_line: %s", peer, strerror(errno));
             return;
         }
-        if (s != n) {
-            fprintf(stderr, "[server] short write: %zd/%zd bytes\n", s, n);
-            return;
-        }
+        LOG_D("%s sent reply", peer);
     }
 }
 
 static void usage(const char *prog)
 {
-    fprintf(stderr, "usage: %s [-p port]\n", prog);
+    fprintf(stderr, "usage: %s [-p port] [-v level(0-2)]\n", prog);
 }
 
 int main(int argc, char *argv[])
@@ -95,15 +79,27 @@ int main(int argc, char *argv[])
     int port = DEFAULT_PORT;
     int opt;
 
-    while ((opt = getopt(argc, argv, "p:")) != -1) {
+    /* 先讀環境變數，再讓命令列 -v 覆寫：越「靠近這次執行」的設定優先 */
+    log_init_from_env();
+
+    while ((opt = getopt(argc, argv, "p:v:")) != -1) {
         switch (opt) {
         case 'p':
-            port = atoi(optarg);
-            if (port <= 0 || port > 65535) {
+            port = parse_int(optarg, 65535);
+            if (port <= 0) {
                 fprintf(stderr, "invalid port: %s\n", optarg);
                 return 1;
             }
             break;
+        case 'v': {
+            int lv = parse_int(optarg, LOG_DEBUG);
+            if (lv < 0) {
+                fprintf(stderr, "invalid log level: %s (expected 0-2)\n", optarg);
+                return 1;
+            }
+            log_set_level(lv);
+            break;
+        }
         default:
             usage(argv[0]);
             return 1;
@@ -119,7 +115,7 @@ int main(int argc, char *argv[])
     /* 1. socket：向核心要一個 TCP 端點，拿回一個檔案描述符（fd） */
     int listenfd = socket(AF_INET, SOCK_STREAM, 0);
     if (listenfd < 0) {
-        fprintf(stderr, "[server] socket: %s\n", strerror(errno));
+        LOG_E("socket: %s", strerror(errno));
         return 1;
     }
 
@@ -127,7 +123,7 @@ int main(int argc, char *argv[])
      *    沒設這個選項，立刻重啟會 bind 失敗（Address already in use）。 */
     int on = 1;
     if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) < 0) {
-        fprintf(stderr, "[server] setsockopt(SO_REUSEADDR): %s\n", strerror(errno));
+        LOG_E("setsockopt(SO_REUSEADDR): %s", strerror(errno));
         close(listenfd);
         return 1;
     }
@@ -141,7 +137,7 @@ int main(int argc, char *argv[])
     addr.sin_port        = htons((uint16_t)port);
 
     if (bind(listenfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        fprintf(stderr, "[server] bind port %d: %s\n", port, strerror(errno));
+        LOG_E("bind port %d: %s", port, strerror(errno));
         close(listenfd);
         return 1;
     }
@@ -149,13 +145,13 @@ int main(int argc, char *argv[])
     /* 4. listen：把 socket 轉成「被動」模式，核心開始替我們完成三向交握，
      *    完成的連線先放在佇列（最多 BACKLOG 個）等 accept 取走。 */
     if (listen(listenfd, BACKLOG) < 0) {
-        fprintf(stderr, "[server] listen: %s\n", strerror(errno));
+        LOG_E("listen: %s", strerror(errno));
         close(listenfd);
         return 1;
     }
 
-    printf("[server] (%s, %s) listening on port %d\n", variant, util_version(), port);
-    fflush(stdout);
+    LOG_I("server (%s, %s) listening on port %d", variant, util_version(), port);
+    LOG_D("debug log compiled in and enabled");
 
     /* 5. accept 迴圈：每次取出一條已建立的連線，得到一個「新的」fd（connfd）。
      *    listenfd 繼續負責接新連線，connfd 專門跟這個 client 對話。 */
@@ -166,7 +162,7 @@ int main(int argc, char *argv[])
         if (connfd < 0) {
             if (errno == EINTR)
                 continue;
-            fprintf(stderr, "[server] accept: %s\n", strerror(errno));
+            LOG_E("accept: %s", strerror(errno));
             continue;   /* 單一連線失敗不該讓整個 server 結束 */
         }
 
@@ -176,14 +172,12 @@ int main(int argc, char *argv[])
         char peer[INET_ADDRSTRLEN + 8];
         snprintf(peer, sizeof(peer), "%s:%u", ip, (unsigned)ntohs(cli.sin_port));
 
-        printf("[server] %s connected\n", peer);
-        fflush(stdout);
-
+        LOG_I("%s connected (connfd=%d)", peer, connfd);
         handle_client(connfd, peer);
+        LOG_I("%s disconnected", peer);
 
-        printf("[server] %s disconnected\n", peer);
-        fflush(stdout);
-        close(connfd);   /* 不 close 會造成 fd 洩漏，對方也收不到 FIN */
+        if (close(connfd) < 0)   /* 不 close 會造成 fd 洩漏，對方也收不到 FIN */
+            LOG_E("close(%d): %s", connfd, strerror(errno));
     }
 
     /* 不會到這裡；階段 6 之後會用 SIGINT 處理優雅結束 */

@@ -1,11 +1,14 @@
 /*
- * 階段 1：最小 client
+ * 階段 2：最小 client，改用 libutil.so 的 send_line / recv_line 與 log
  *
  * 流程：socket → connect → 送出一行 → 讀回一行 → 印出 → close
  *
- * 用法：./client [-h host] [-p port] <text...>
- *   命令列剩下的參數以空白串成一行，結尾補 '\n' 後送出。
+ * 用法：./client [-h host] [-p port] [-v level] <text...>
+ *   命令列剩下的參數以空白串成一行送出（send_line 會補 '\n'）。
  *   例：./client -p 9000 hello world   → 送出 "hello world\n"
+ *
+ * 輸出分流：server 的回覆印到 stdout；log 一律寫到 stderr。
+ * 這樣 `./client ... > out.txt` 只會存到回覆，不會混進 log。
  */
 #include <arpa/inet.h>   /* inet_pton, htons */
 #include <errno.h>
@@ -22,38 +25,18 @@
 #define DEFAULT_PORT 9000
 #endif
 
-#define MAX_LINE 1024
-
-/* 與 server 相同的「一次讀 1 byte 直到 '\n'」；階段 2 會統一移進 libutil.so */
-static ssize_t read_line_simple(int fd, char *buf, size_t maxlen)
+static int parse_int(const char *s, int max)
 {
-    size_t n = 0;
-    while (n < maxlen - 1) {
-        char c;
-        ssize_t r = recv(fd, &c, 1, 0);
-        if (r == 0)
-            return (n == 0) ? 0 : -1;
-        if (r < 0) {
-            if (errno == EINTR)
-                continue;
-            fprintf(stderr, "[client] recv: %s\n", strerror(errno));
-            return -1;
-        }
-        buf[n++] = c;
-        if (c == '\n')
-            break;
-    }
-    buf[n] = '\0';
-    if (n > 0 && buf[n - 1] != '\n') {
-        fprintf(stderr, "[client] reply too long\n");
+    char *end;
+    long v = strtol(s, &end, 10);
+    if (s[0] == '\0' || *end != '\0' || v < 0 || v > max)
         return -1;
-    }
-    return (ssize_t)n;
+    return (int)v;
 }
 
 static void usage(const char *prog)
 {
-    fprintf(stderr, "usage: %s [-h host] [-p port] <text...>\n", prog);
+    fprintf(stderr, "usage: %s [-h host] [-p port] [-v level(0-2)] <text...>\n", prog);
 }
 
 int main(int argc, char *argv[])
@@ -62,18 +45,29 @@ int main(int argc, char *argv[])
     int port = DEFAULT_PORT;
     int opt;
 
-    while ((opt = getopt(argc, argv, "h:p:")) != -1) {
+    log_init_from_env();
+
+    while ((opt = getopt(argc, argv, "h:p:v:")) != -1) {
         switch (opt) {
         case 'h':
             host = optarg;
             break;
         case 'p':
-            port = atoi(optarg);
-            if (port <= 0 || port > 65535) {
+            port = parse_int(optarg, 65535);
+            if (port <= 0) {
                 fprintf(stderr, "invalid port: %s\n", optarg);
                 return 1;
             }
             break;
+        case 'v': {
+            int lv = parse_int(optarg, LOG_DEBUG);
+            if (lv < 0) {
+                fprintf(stderr, "invalid log level: %s (expected 0-2)\n", optarg);
+                return 1;
+            }
+            log_set_level(lv);
+            break;
+        }
         default:
             usage(argv[0]);
             return 1;
@@ -84,7 +78,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    /* 把剩下的參數用空白串起來，留 2 byte 給 '\n' 與 '\0'。
+    /* 把剩下的參數用空白串起來。上限 MAX_LINE-2：留給 send_line 補的 '\n' 與 '\0'。
      * 用 snprintf 帶長度寫入，避免溢位；超過上限就直接拒絕。 */
     char line[MAX_LINE];
     size_t len = 0;
@@ -92,18 +86,11 @@ int main(int argc, char *argv[])
         int w = snprintf(line + len, sizeof(line) - 1 - len, "%s%s",
                          (i > optind) ? " " : "", argv[i]);
         if (w < 0 || (size_t)w >= sizeof(line) - 1 - len) {
-            fprintf(stderr, "[client] input too long (max %d bytes)\n", MAX_LINE - 2);
+            LOG_E("input too long (max %d bytes)", MAX_LINE - 2);
             return 1;
         }
         len += (size_t)w;
     }
-    /* '\n' 是本協定唯一的訊息邊界；內容本身不能含 '\n'，否則會被當成兩行 */
-    if (memchr(line, '\n', len) != NULL) {
-        fprintf(stderr, "[client] input must not contain newline\n");
-        return 1;
-    }
-    line[len++] = '\n';
-    line[len] = '\0';
 
     /* 把文字 IP 轉成 32-bit 網路位元組序的位址 */
     struct sockaddr_in addr;
@@ -111,49 +98,56 @@ int main(int argc, char *argv[])
     addr.sin_family = AF_INET;
     addr.sin_port   = htons((uint16_t)port);
     if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
-        fprintf(stderr, "[client] invalid IPv4 address: %s\n", host);
+        LOG_E("invalid IPv4 address: %s", host);
         return 1;
     }
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
-        fprintf(stderr, "[client] socket: %s\n", strerror(errno));
+        LOG_E("socket: %s", strerror(errno));
         return 1;
     }
 
     /* connect：主動發起三向交握（SYN → SYN-ACK → ACK），完成後才回傳。
      * client 不需要 bind，核心會自動挑一個暫時埠（ephemeral port）。 */
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        fprintf(stderr, "[client] connect %s:%d: %s\n", host, port, strerror(errno));
+        LOG_E("connect %s:%d: %s", host, port, strerror(errno));
         close(fd);
         return 1;
     }
+    LOG_D("connected to %s:%d (fd=%d)", host, port, fd);
 
-    /* 階段 1 簡化：一次 send；階段 2 改用 send_all 處理部分寫入 */
-    ssize_t s = send(fd, line, len, 0);
-    if (s < 0) {
-        fprintf(stderr, "[client] send: %s\n", strerror(errno));
+    /* send_line 會拒絕內含 '\n' 的字串（errno=EMSGSIZE），
+     * 因為 '\n' 是本協定唯一的訊息邊界，內容裡出現就會被切成兩則訊息。 */
+    if (send_line(fd, line) < 0) {
+        if (errno == EMSGSIZE)
+            LOG_E("input must be a single line shorter than %d bytes", MAX_LINE - 1);
+        else
+            LOG_E("send_line: %s", strerror(errno));
         close(fd);
         return 1;
     }
-    if ((size_t)s != len) {
-        fprintf(stderr, "[client] short write: %zd/%zu bytes\n", s, len);
-        close(fd);
-        return 1;
-    }
+    LOG_D("sent: %s", line);
 
     char reply[MAX_LINE];
-    ssize_t n = read_line_simple(fd, reply, sizeof(reply));
-    if (n <= 0) {
-        fprintf(stderr, "[client] %s\n", n == 0 ? "server closed connection" : "failed to read reply");
+    ssize_t n = recv_line(fd, reply, sizeof(reply));
+    if (n == 0) {
+        LOG_E("server closed connection without reply");
         close(fd);
         return 1;
     }
+    if (n < 0) {
+        LOG_E("recv_line: %s", strerror(errno));
+        close(fd);
+        return 1;
+    }
+    LOG_D("received %zd bytes", n);
 
-    /* 輸出時去掉結尾 '\n'，再由 printf 補上，讓格式一致 */
-    printf("%.*s\n", (int)(n - 1), reply);
+    /* 結尾已有 '\n'，原樣印出即可 */
+    fputs(reply, stdout);
 
     /* close 會送出 FIN；server 的 recv 因此回傳 0，得知對方已結束 */
-    close(fd);
+    if (close(fd) < 0)
+        LOG_E("close: %s", strerror(errno));
     return 0;
 }

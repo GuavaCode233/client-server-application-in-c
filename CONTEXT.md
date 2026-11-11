@@ -104,8 +104,9 @@ void caesar_encrypt(char *s, int k);          // in-place
 void caesar_decrypt(char *s, int k);
 
 /* --- 網路 I/O --- */
-ssize_t send_all(int fd, const void *buf, size_t len);  // 處理部分寫入、EINTR、MSG_NOSIGNAL
-ssize_t recv_line(int fd, char *buf, size_t maxlen);    // 讀一行；回傳長度，0=對方關閉，-1=錯誤
+ssize_t send_all(int fd, const void *buf, size_t len);  // 處理部分寫入、EINTR
+                                                        // （不加 MSG_NOSIGNAL，讓 naive 版能重現 R2；robust 版由 server 忽略 SIGPIPE）
+ssize_t recv_line(int fd, char *buf, size_t maxlen);    // 讀一行（含 '\n'）；回傳長度，0=對方關閉，-1=錯誤（EMSGSIZE=超長）
 int     send_line(int fd, const char *line);            // 自動補 '\n'
 
 /* --- Log --- */
