@@ -1,0 +1,9 @@
+# 編譯產物
+*.o
+*.so
+server/server_naive
+server/server_robust
+client/client
+
+# 封包擷取檔（體積大，需要時再手動加入）
+docs/*.pcap
