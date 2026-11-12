@@ -5,7 +5,7 @@
  * libutil.so 的公開介面（CONTEXT.md B6）。
  *
  * 階段 2：網路 I/O（send_all / recv_line / send_line）＋ 兩層 log。
- * 階段 5 會再加入 caesar_encrypt / caesar_decrypt。
+ * 階段 5：caesar_encrypt / caesar_decrypt。
  */
 
 #include <stddef.h>      /* size_t */
@@ -15,6 +15,17 @@
 
 /* 回傳函式庫版本字串（server 啟動時印出，方便確認載入的是哪一版 .so） */
 const char *util_version(void);
+
+/* --- Caesar（CONTEXT.md B5）--- */
+
+#define CAESAR_DEFAULT_KEY 3
+
+/* 對 s 中的可印出 ASCII（32–126，共 95 個）做位移，原地修改。
+ * 範圍外的 byte（控制字元、'\n'、UTF-8 多位元組字元的每個 byte）不處理。
+ * k 可為任意整數，內部會先正規化到 0–94；k ≡ 0 (mod 95) 時等於不加密。
+ * 僅為教學示範：金鑰空間只有 95，可被暴力破解與頻率分析。 */
+void caesar_encrypt(char *s, int k);
+void caesar_decrypt(char *s, int k);
 
 /* --- 網路 I/O --- */
 

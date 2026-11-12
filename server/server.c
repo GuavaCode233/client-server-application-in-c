@@ -1,5 +1,9 @@
 /*
- * 階段 4：併發 server，支援 SYSINFO / ECHO / QUIT 指令（CONTEXT.md B3）
+ * 階段 5：併發 server，支援 SYSINFO / ECHO / QUIT 指令（CONTEXT.md B3），
+ *         每行內容雙向凱薩加密（CONTEXT.md B5）
+ *
+ * 線路上的資料流：
+ *   client 加密指令 → [密文\n] → server 解密 → 執行 → 加密回應 → [密文\n] → client 解密
  *
  * 流程：socket → setsockopt(SO_REUSEADDR) → bind → listen → 迴圈 accept → fork
  *   子行程：close(listenfd) → 反覆「讀一行指令、回一行結果」→ close(connfd) → exit(0)
@@ -53,6 +57,9 @@ static int parse_int(const char *s, int max)
  * 為什麼不在子行程用 getppid()？父行程若先結束，子行程會被 init 收養，
  * getppid() 就會變成 1，回報的值不再是「server 的 pid」。 */
 static pid_t g_server_pid;
+
+/* 凱薩金鑰：雙方事先約定（預設 3，-k 覆寫）。子行程經由 fork 繼承。 */
+static int g_key = CAESAR_DEFAULT_KEY;
 
 /*
  * 產生 SYSINFO 的回應（不含 '\n'）。成功回傳 0，失敗回傳 -1。
@@ -149,19 +156,27 @@ static void handle_client(int connfd, const char *peer)
 
         line[--n] = '\0';     /* 去掉 '\n'：協定層的邊界，不是內容的一部分 */
         /* 也去掉行尾的 '\r'：telnet 等工具送出的是 "\r\n"，
-         * 不去掉的話 "QUIT\r" 會被判成未知指令。 */
+         * 不去掉的話 "QUIT\r" 會被判成未知指令。
+         * '\r' 不在 32–126 範圍內，加解密都不會動到它，所以在解密前後去掉都一樣。 */
         if (n > 0 && line[n - 1] == '\r')
             line[--n] = '\0';
 
+        /* 線路上收到的是密文；解密後才是指令。
+         * 注意順序：先用 '\n' 切出一行，再解密「行的內容」。
+         * 密文必定落在 32–126，不會出現 '\n'，所以加密不會破壞訊息邊界。 */
+        LOG_D("%s recv cipher: %s", peer, line);
+        caesar_decrypt(line, g_key);
         LOG_I("%s cmd: %s", peer, line);
 
         int quit = dispatch(line, reply, sizeof(reply));
+        LOG_D("%s reply plain: %s", peer, reply);
 
+        caesar_encrypt(reply, g_key);   /* 回應也加密（雙向，CONTEXT.md B5） */
         if (send_line(connfd, reply) < 0) {
             LOG_E("%s send_line: %s", peer, strerror(errno));
             return;
         }
-        LOG_D("%s reply: %s", peer, reply);
+        LOG_D("%s sent cipher: %s", peer, reply);
 
         if (quit) {
             LOG_I("%s requested QUIT", peer);
@@ -172,7 +187,7 @@ static void handle_client(int connfd, const char *peer)
 
 static void usage(const char *prog)
 {
-    fprintf(stderr, "usage: %s [-p port] [-v level(0-2)]\n", prog);
+    fprintf(stderr, "usage: %s [-p port] [-k shift(0-94)] [-v level(0-2)]\n", prog);
 }
 
 int main(int argc, char *argv[])
@@ -183,8 +198,16 @@ int main(int argc, char *argv[])
     /* 先讀環境變數，再讓命令列 -v 覆寫：越「靠近這次執行」的設定優先 */
     log_init_from_env();
 
-    while ((opt = getopt(argc, argv, "p:v:")) != -1) {
+    while ((opt = getopt(argc, argv, "p:k:v:")) != -1) {
         switch (opt) {
+        case 'k':
+            /* 0 = 不加密（明文），用來和加密版對照封包內容（CONTEXT.md B11 加分項） */
+            g_key = parse_int(optarg, 94);
+            if (g_key < 0) {
+                fprintf(stderr, "invalid shift: %s (expected 0-94)\n", optarg);
+                return 1;
+            }
+            break;
         case 'p':
             port = parse_int(optarg, 65535);
             if (port <= 0) {
@@ -252,7 +275,8 @@ int main(int argc, char *argv[])
     }
 
     g_server_pid = getpid();   /* fork 之前記下；子行程會繼承這個值的複本 */
-    LOG_I("server (%s, %s) listening on port %d", variant, util_version(), port);
+    LOG_I("server (%s, %s) listening on port %d, caesar k=%d%s", variant, util_version(),
+          port, g_key, g_key == 0 ? " (plaintext)" : "");
     LOG_D("debug log compiled in and enabled");
 
     /* 5. accept 迴圈：每次取出一條已建立的連線，得到一個「新的」fd（connfd）。

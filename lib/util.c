@@ -11,7 +11,52 @@
 
 const char *util_version(void)
 {
-    return "libutil 0.2 (stage 2)";
+    return "libutil 0.5 (stage 5)";
+}
+
+/* ======================================================================
+ *  Caesar
+ * ====================================================================== */
+
+#define PRINT_LO  32                        /* ' ' */
+#define PRINT_HI  126                       /* '~' */
+#define PRINT_N   (PRINT_HI - PRINT_LO + 1) /* 95 */
+
+/* 把任意整數 k 正規化到 [0, 94]。
+ * C 的 % 對負數會得到負值（例如 -1 % 95 == -1），所以先取餘數、再加 95、再取一次餘數。 */
+static int caesar_norm(int k)
+{
+    return ((k % PRINT_N) + PRINT_N) % PRINT_N;
+}
+
+/* 核心：對每個可印出字元位移 shift（0–94）。加密與解密只差在 shift 的方向。 */
+static void caesar_shift(char *s, int shift)
+{
+    for (; *s != '\0'; s++) {
+        /* 一定要先轉成 unsigned char：char 在 x86 上是 signed，
+         * UTF-8 中文字的 byte（≥ 0x80）會變成負數，直接比較或運算都會出錯。 */
+        unsigned char c = (unsigned char)*s;
+        if (c < PRINT_LO || c > PRINT_HI)
+            continue;                        /* 範圍外不處理：'\n'、'\r'、UTF-8 byte 原樣保留 */
+        /* c - 32 ∈ [0,94]，shift ∈ [0,94]，相加 ∈ [0,188]，不會是負數 */
+        *s = (char)(PRINT_LO + (c - PRINT_LO + shift) % PRINT_N);
+    }
+}
+
+void caesar_encrypt(char *s, int k)
+{
+    if (s == NULL)
+        return;
+    caesar_shift(s, caesar_norm(k));
+}
+
+void caesar_decrypt(char *s, int k)
+{
+    if (s == NULL)
+        return;
+    /* 解密 = 往反方向位移 k = 往正方向位移 (95 - k)。
+     * 這就是 CONTEXT.md B5 的「c - 32 - k + 95」安全形式：先加 95 避免出現負數。 */
+    caesar_shift(s, (PRINT_N - caesar_norm(k)) % PRINT_N);
 }
 
 /* ======================================================================

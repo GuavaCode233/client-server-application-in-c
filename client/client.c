@@ -1,11 +1,12 @@
 /*
- * 階段 2：最小 client，改用 libutil.so 的 send_line / recv_line 與 log
+ * 階段 5：client，指令與回應都以凱薩加密傳輸
  *
- * 流程：socket → connect → 送出一行 → 讀回一行 → 印出 → close
+ * 流程：socket → connect → 加密指令並送出一行 → 讀回一行 → 解密 → 印出 → close
  *
- * 用法：./client [-h host] [-p port] [-v level] <text...>
+ * 用法：./client [-h host] [-p port] [-k shift] [-v level] <command...>
  *   命令列剩下的參數以空白串成一行送出（send_line 會補 '\n'）。
- *   例：./client -p 9000 hello world   → 送出 "hello world\n"
+ *   例：./client -p 9000 ECHO hello   → 線路上是 "HFKR#khoor\n"（k=3）
+ *   -k 必須與 server 相同；-k 0 = 不加密。
  *
  * 輸出分流：server 的回覆印到 stdout；log 一律寫到 stderr。
  * 這樣 `./client ... > out.txt` 只會存到回覆，不會混進 log。
@@ -36,19 +37,28 @@ static int parse_int(const char *s, int max)
 
 static void usage(const char *prog)
 {
-    fprintf(stderr, "usage: %s [-h host] [-p port] [-v level(0-2)] <text...>\n", prog);
+    fprintf(stderr, "usage: %s [-h host] [-p port] [-k shift(0-94)] [-v level(0-2)] <command...>\n",
+            prog);
 }
 
 int main(int argc, char *argv[])
 {
     const char *host = "127.0.0.1";
     int port = DEFAULT_PORT;
+    int key = CAESAR_DEFAULT_KEY;
     int opt;
 
     log_init_from_env();
 
-    while ((opt = getopt(argc, argv, "h:p:v:")) != -1) {
+    while ((opt = getopt(argc, argv, "h:p:k:v:")) != -1) {
         switch (opt) {
+        case 'k':
+            key = parse_int(optarg, 94);
+            if (key < 0) {
+                fprintf(stderr, "invalid shift: %s (expected 0-94)\n", optarg);
+                return 1;
+            }
+            break;
         case 'h':
             host = optarg;
             break;
@@ -117,6 +127,11 @@ int main(int argc, char *argv[])
     }
     LOG_D("connected to %s:%d (fd=%d)", host, port, fd);
 
+    /* 加密「行的內容」，'\n' 由 send_line 在加密之後才補上。
+     * 密文只會落在 32–126，不會產生 '\n'，訊息邊界不受影響。 */
+    LOG_D("plain: %s", line);
+    caesar_encrypt(line, key);
+
     /* send_line 會拒絕內含 '\n' 的字串（errno=EMSGSIZE），
      * 因為 '\n' 是本協定唯一的訊息邊界，內容裡出現就會被切成兩則訊息。 */
     if (send_line(fd, line) < 0) {
@@ -127,7 +142,7 @@ int main(int argc, char *argv[])
         close(fd);
         return 1;
     }
-    LOG_D("sent: %s", line);
+    LOG_D("sent cipher: %s", line);
 
     char reply[MAX_LINE];
     ssize_t n = recv_line(fd, reply, sizeof(reply));
@@ -141,10 +156,11 @@ int main(int argc, char *argv[])
         close(fd);
         return 1;
     }
-    LOG_D("received %zd bytes", n);
+    reply[n - 1] = '\0';              /* 先去掉 '\n'，只解密內容 */
+    LOG_D("recv cipher: %s", reply);
+    caesar_decrypt(reply, key);
 
-    /* 結尾已有 '\n'，原樣印出即可 */
-    fputs(reply, stdout);
+    printf("%s\n", reply);
 
     /* close 會送出 FIN；server 的 recv 因此回傳 0，得知對方已結束 */
     if (close(fd) < 0)
