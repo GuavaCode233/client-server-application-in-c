@@ -1,6 +1,7 @@
 /*
- * 階段 5：併發 server，支援 SYSINFO / ECHO / QUIT 指令（CONTEXT.md B3），
- *         每行內容雙向凱薩加密（CONTEXT.md B5）
+ * 階段 6：併發 server，支援 SYSINFO / ECHO / QUIT 指令（CONTEXT.md B3），
+ *         每行內容雙向凱薩加密（CONTEXT.md B5），
+ *         並以編譯期巨集 ROBUST 切換強健性機制（CONTEXT.md B9）
  *
  * 線路上的資料流：
  *   client 加密指令 → [密文\n] → server 解密 → 執行 → 加密回應 → [密文\n] → client 解密
@@ -16,8 +17,13 @@
  *   QUIT          → OK bye，然後 server 關閉連線
  *   其他          → ERR unknown command
  *
- * 注意：此階段「刻意不處理 SIGCHLD」。子行程結束後父行程不會 wait，
- * 會留下殭屍行程（ps 顯示 Z / <defunct>）。階段 6 的 R1 再用 robust 版修正並對照。
+ * 同一份原始碼編出兩個版本（make 會同時產生）：
+ *                  server_naive                     server_robust（-DROBUST）
+ *   R1 殭屍行程    不 wait，<defunct> 累積           SIGCHLD handler 迴圈 waitpid(WNOHANG)
+ *   R2 SIGPIPE     寫入已斷線的連線 → 子行程被殺     忽略 SIGPIPE，send 回傳 EPIPE 後優雅結束
+ *   R3 閒置 client 子行程永久阻塞在 recv              SO_RCVTIMEO，逾時記 log 並關閉連線
+ *
+ * 兩個版本都有的基本處理（不列入對照）：SO_REUSEADDR（R5）、accept/recv 遇 EINTR 重試（R6）。
  *
  * Log 等級：
  *   執行期：環境變數 LOG_LEVEL=0|1|2，或 -v level（-v 優先）
@@ -26,13 +32,16 @@
 #include <arpa/inet.h>   /* inet_ntop, htons, ntohs */
 #include <errno.h>
 #include <netinet/in.h>  /* sockaddr_in, INADDR_ANY */
+#include <signal.h>      /* sigaction, SIGCHLD, SIGPIPE */
 #include <stdio.h>
 #include <stdlib.h>      /* strtol */
 #include <string.h>      /* strerror, memset */
 #include <sys/socket.h>
 #include <sys/sysinfo.h> /* sysinfo()：Linux 專用 */
+#include <sys/time.h>    /* struct timeval（SO_RCVTIMEO） */
 #include <sys/types.h>   /* pid_t */
 #include <sys/utsname.h> /* uname() */
+#include <sys/wait.h>    /* waitpid, WNOHANG */
 #include <unistd.h>      /* close, getopt, fork, getpid */
 
 #include "util.h"
@@ -42,6 +51,7 @@
 #endif
 
 #define BACKLOG 16          /* listen 佇列長度，見 CONTEXT.md B8 */
+#define DEFAULT_TIMEOUT 30  /* R3：client 閒置多少秒後斷線（-t 覆寫，0 = 不限制） */
 
 /* 解析 0~max 的整數參數；格式錯誤回傳 -1 */
 static int parse_int(const char *s, int max)
@@ -60,6 +70,79 @@ static pid_t g_server_pid;
 
 /* 凱薩金鑰：雙方事先約定（預設 3，-k 覆寫）。子行程經由 fork 繼承。 */
 static int g_key = CAESAR_DEFAULT_KEY;
+
+/* R3：接收逾時秒數（-t 覆寫）。只有 robust 版會套用。 */
+static int g_timeout = DEFAULT_TIMEOUT;
+
+#ifdef ROBUST
+/*
+ * R1：SIGCHLD handler，回收所有已結束的子行程。
+ *
+ * 為什麼是 while 迴圈，而不是只呼叫一次 waitpid？
+ *   標準信號「不排隊」：handler 執行期間（或被遮罩時）又有 3 個子行程結束，
+ *   核心只會記錄「有一個待處理的 SIGCHLD」，handler 只會再被呼叫一次。
+ *   所以每次進來都要把「目前所有已結束的」一次收乾淨。
+ * 為什麼要 WNOHANG？
+ *   沒有已結束的子行程時立刻回傳 0，而不是阻塞等待（handler 裡絕不能卡住）。
+ * 為什麼要保存 errno？
+ *   handler 可能在主程式「剛呼叫完某個系統呼叫、還沒讀 errno」時插進來，
+ *   waitpid 會改掉 errno（例如最後一次回傳 -1 / ECHILD），必須還原。
+ * 為什麼不在這裡寫 log？
+ *   log_write 用到 snprintf、localtime_r，它們不是 async-signal-safe：
+ *   若主程式正在同一個函式裡（例如持有 libc 內部的鎖）時被打斷，可能死結或資料錯亂。
+ *   handler 內只呼叫 async-signal-safe 的函式（waitpid 是）。
+ */
+static void sigchld_handler(int signo)
+{
+    (void)signo;
+    int saved_errno = errno;
+    while (waitpid(-1, NULL, WNOHANG) > 0)
+        ;
+    errno = saved_errno;
+}
+
+/* 安裝 robust 版的信號處置。在 fork 之前呼叫，子行程會繼承同樣的設定。 */
+static int install_robust_signals(void)
+{
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = sigchld_handler;
+    sigemptyset(&sa.sa_mask);
+    /* SA_RESTART：父行程阻塞在 accept 時收到 SIGCHLD，handler 執行完後
+     * 由核心自動重新呼叫 accept，而不是讓 accept 回傳 -1 / EINTR。
+     * （程式中 accept 的 EINTR 重試是第二層保險，見 R6。）
+     * SA_NOCLDSTOP：子行程只是被暫停（SIGSTOP）時不要通知，只在結束時通知。 */
+    sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+    if (sigaction(SIGCHLD, &sa, NULL) < 0) {
+        LOG_E("sigaction(SIGCHLD): %s", strerror(errno));
+        return -1;
+    }
+
+    /* R2：忽略 SIGPIPE。之後對已斷線的連線 send 不會再殺掉行程，
+     * 而是回傳 -1 並設 errno = EPIPE，由程式自己決定如何收尾。
+     * 「忽略」的處置會被 fork 出來的子行程繼承，真正寫資料的正是子行程。 */
+    struct sigaction ign;
+    memset(&ign, 0, sizeof(ign));
+    ign.sa_handler = SIG_IGN;
+    sigemptyset(&ign.sa_mask);
+    if (sigaction(SIGPIPE, &ign, NULL) < 0) {
+        LOG_E("sigaction(SIGPIPE): %s", strerror(errno));
+        return -1;
+    }
+    return 0;
+}
+
+/* R3：對這條連線設定接收逾時。recv 超過 sec 秒沒有資料就回傳 -1 / EAGAIN。 */
+static int set_recv_timeout(int fd, int sec)
+{
+    struct timeval tv = { .tv_sec = sec, .tv_usec = 0 };
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+        LOG_E("setsockopt(SO_RCVTIMEO): %s", strerror(errno));
+        return -1;
+    }
+    return 0;
+}
+#endif /* ROBUST */
 
 /*
  * 產生 SYSINFO 的回應（不含 '\n'）。成功回傳 0，失敗回傳 -1。
@@ -149,6 +232,9 @@ static void handle_client(int connfd, const char *peer)
         if (n < 0) {
             if (errno == EMSGSIZE)
                 LOG_E("%s line too long (> %d bytes), closing", peer, MAX_LINE - 1);
+            else if (errno == EAGAIN || errno == EWOULDBLOCK)
+                /* R3（robust）：SO_RCVTIMEO 到期。只有 robust 版會設定逾時，所以 naive 不會走到這裡 */
+                LOG_I("%s idle for %d s, closing (R3)", peer, g_timeout);
             else
                 LOG_E("%s recv_line: %s", peer, strerror(errno));
             return;
@@ -172,8 +258,14 @@ static void handle_client(int connfd, const char *peer)
         LOG_D("%s reply plain: %s", peer, reply);
 
         caesar_encrypt(reply, g_key);   /* 回應也加密（雙向，CONTEXT.md B5） */
+        /* R2：對方已經 RST 時：
+         *   naive ：SIGPIPE 預設動作 = 終止行程，send_line「不會回傳」，下面的 log 都不會出現
+         *   robust：SIGPIPE 已被忽略，send_line 回傳 -1、errno = EPIPE，在這裡優雅結束 */
         if (send_line(connfd, reply) < 0) {
-            LOG_E("%s send_line: %s", peer, strerror(errno));
+            if (errno == EPIPE || errno == ECONNRESET)
+                LOG_I("%s peer gone while sending (%s), closing (R2)", peer, strerror(errno));
+            else
+                LOG_E("%s send_line: %s", peer, strerror(errno));
             return;
         }
         LOG_D("%s sent cipher: %s", peer, reply);
@@ -187,7 +279,9 @@ static void handle_client(int connfd, const char *peer)
 
 static void usage(const char *prog)
 {
-    fprintf(stderr, "usage: %s [-p port] [-k shift(0-94)] [-v level(0-2)]\n", prog);
+    fprintf(stderr,
+            "usage: %s [-p port] [-k shift(0-94)] [-v level(0-2)] [-t timeout_sec(0=off)]\n",
+            prog);
 }
 
 int main(int argc, char *argv[])
@@ -198,8 +292,15 @@ int main(int argc, char *argv[])
     /* 先讀環境變數，再讓命令列 -v 覆寫：越「靠近這次執行」的設定優先 */
     log_init_from_env();
 
-    while ((opt = getopt(argc, argv, "p:k:v:")) != -1) {
+    while ((opt = getopt(argc, argv, "p:k:v:t:")) != -1) {
         switch (opt) {
+        case 't':
+            g_timeout = parse_int(optarg, 86400);
+            if (g_timeout < 0) {
+                fprintf(stderr, "invalid timeout: %s (expected 0-86400)\n", optarg);
+                return 1;
+            }
+            break;
         case 'k':
             /* 0 = 不加密（明文），用來和加密版對照封包內容（CONTEXT.md B11 加分項） */
             g_key = parse_int(optarg, 94);
@@ -275,8 +376,24 @@ int main(int argc, char *argv[])
     }
 
     g_server_pid = getpid();   /* fork 之前記下；子行程會繼承這個值的複本 */
+
+#ifdef ROBUST
+    /* 在第一次 fork 之前安裝，之後每個子行程都會繼承 */
+    if (install_robust_signals() < 0) {
+        close(listenfd);
+        return 1;
+    }
+#endif
+
     LOG_I("server (%s, %s) listening on port %d, caesar k=%d%s", variant, util_version(),
           port, g_key, g_key == 0 ? " (plaintext)" : "");
+#ifdef ROBUST
+    LOG_I("robust: R1 SIGCHLD reaping on, R2 SIGPIPE ignored, R3 idle timeout %d s%s",
+          g_timeout, g_timeout == 0 ? " (off)" : "");
+#else
+    LOG_I("naive: no SIGCHLD reaping, default SIGPIPE, no idle timeout%s",
+          g_timeout != DEFAULT_TIMEOUT ? " (-t ignored in naive build)" : "");
+#endif
     LOG_D("debug log compiled in and enabled");
 
     /* 5. accept 迴圈：每次取出一條已建立的連線，得到一個「新的」fd（connfd）。
@@ -321,6 +438,12 @@ int main(int argc, char *argv[])
             LOG_I("%s connected (child pid=%d, connfd=%d)", peer, (int)getpid(), connfd);
             /* 子行程「繼承」父行程的 log 等級與 g_server_pid：fork 複製了整個記憶體，
              * 所以不需要任何額外的傳遞機制。 */
+#ifdef ROBUST
+            /* R3：逾時設定在 connfd 上，每條連線各自計時。
+             * 設定失敗不致命：只是少了逾時保護，連線仍可正常服務。 */
+            if (g_timeout > 0)
+                set_recv_timeout(connfd, g_timeout);
+#endif
             handle_client(connfd, peer);
             LOG_I("%s disconnected", peer);
 
@@ -341,7 +464,7 @@ int main(int argc, char *argv[])
             LOG_E("parent close(connfd=%d): %s", connfd, strerror(errno));
     }
 
-    /* 不會到這裡；階段 6 之後會用 SIGINT 處理優雅結束 */
+    /* 不會到這裡；以 Ctrl+C（SIGINT 預設動作）結束 server */
     close(listenfd);
     return 0;
 }
