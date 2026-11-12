@@ -1,0 +1,79 @@
+
+==================================================================
+R1 殭屍行程 — server_naive
+$ for i in 1..5: ./client/client ECHO hi-$i
+$ ps --ppid 611 -o pid,ppid,stat,cmd
+    PID    PPID STAT CMD
+    614     611 Z+   [server_naive] <defunct>
+    616     611 Z+   [server_naive] <defunct>
+    618     611 Z+   [server_naive] <defunct>
+    620     611 Z+   [server_naive] <defunct>
+    622     611 Z+   [server_naive] <defunct>
+  → 預期：5 個 Z <defunct>（父行程從不 wait）
+  → 實際：zombie 數量 = 5
+
+==================================================================
+R1 殭屍行程 — server_robust
+$ for i in 1..5: ./client/client ECHO hi-$i
+$ ps --ppid 628 -o pid,ppid,stat,cmd
+    PID    PPID STAT CMD
+  → 預期：沒有任何子行程（SIGCHLD handler 已用 waitpid 回收）
+  → 實際：zombie 數量 = 0
+
+==================================================================
+R2 對已斷線的連線寫入（SIGPIPE）— server_naive
+$ client 以一次 write 送出 5 行指令後立刻 close，不讀任何回覆
+$ server log：
+    [INFO ][647][server/server.c:438] 127.0.0.1:47512 connected (child pid=647, connfd=4)
+    [INFO ][647][server/server.c:255] 127.0.0.1:47512 cmd: u
+    [INFO ][647][server/server.c:255] 127.0.0.1:47512 cmd: u
+$ ps --ppid 645 -o pid,stat,cmd ；並讀取殭屍的結束狀態
+    PID    PPID STAT CMD
+    647     645 Z+   [server_naive] <defunct>
+  → 子行程 647 的 exit_code = 13 → 被信號 13 終止（PIPE）
+  → 預期：log 只有 connected 與一兩行 cmd，沒有 disconnected — 子行程來不及清理就被殺掉
+
+==================================================================
+R2 對已斷線的連線寫入（SIGPIPE）— server_robust
+$ client 以一次 write 送出 5 行指令後立刻 close，不讀任何回覆
+$ server log：
+    [INFO ][661][server/server.c:438] 127.0.0.1:47518 connected (child pid=661, connfd=4)
+    [INFO ][661][server/server.c:255] 127.0.0.1:47518 cmd: u
+    [INFO ][661][server/server.c:255] 127.0.0.1:47518 cmd: u
+    [INFO ][661][server/server.c:266] 127.0.0.1:47518 peer gone while sending (Broken pipe), closing (R2)
+    [INFO ][661][server/server.c:448] 127.0.0.1:47518 disconnected
+$ ps --ppid 659 -o pid,stat,cmd
+    PID    PPID STAT CMD
+  → 預期：log 出現 'peer gone while sending (Broken pipe), closing (R2)' 與 disconnected，
+  →       子行程正常 exit(0) 並被回收
+
+==================================================================
+R3 閒置 client — server_naive -t 3
+$ client 連上後什麼都不送（保持連線）
+$ ps --ppid 667 -o pid,stat,cmd   （剛連上）
+    PID    PPID STAT CMD
+    669     667 S+   ./server/server_naive -p 9700 -t 3
+$ sleep 5
+$ ps --ppid 667 -o pid,stat,cmd   （5 秒後）
+    PID    PPID STAT CMD
+    669     667 S+   ./server/server_naive -p 9700 -t 3
+$ server log：
+    [INFO ][669][server/server.c:438] 127.0.0.1:47522 connected (child pid=669, connfd=4)
+  → 預期：子行程仍是 S（阻塞在 recv），永遠不會結束；-t 在 naive 版被忽略
+
+==================================================================
+R3 閒置 client — server_robust -t 3
+$ client 連上後什麼都不送（保持連線）
+$ ps --ppid 677 -o pid,stat,cmd   （剛連上）
+    PID    PPID STAT CMD
+    679     677 S+   ./server/server_robust -p 9700 -t 3
+$ sleep 5
+$ ps --ppid 677 -o pid,stat,cmd   （5 秒後）
+    PID    PPID STAT CMD
+$ server log：
+    [INFO ][679][server/server.c:438] 127.0.0.1:44840 connected (child pid=679, connfd=4)
+    [INFO ][679][server/server.c:237] 127.0.0.1:44840 idle for 3 s, closing (R3)
+    [INFO ][679][server/server.c:448] 127.0.0.1:44840 disconnected
+  → 預期：log 出現 'idle for 3 s, closing (R3)'，子行程已結束並被回收
+
+==================================================================

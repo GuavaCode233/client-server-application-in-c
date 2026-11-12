@@ -1,0 +1,25 @@
+$ make clean && make
+gcc -std=gnu11 -Wall -Wextra -g -Iinclude -DDEFAULT_PORT=9000 -fPIC -shared -o lib/libutil.so lib/util.c
+gcc -std=gnu11 -Wall -Wextra -g -Iinclude -DDEFAULT_PORT=9000 -o server/server_naive server/server.c -Llib -Wl,-rpath,'$ORIGIN/../lib' -lutil
+gcc -std=gnu11 -Wall -Wextra -g -Iinclude -DDEFAULT_PORT=9000 -DROBUST -o server/server_robust server/server.c -Llib -Wl,-rpath,'$ORIGIN/../lib' -lutil
+gcc -std=gnu11 -Wall -Wextra -g -Iinclude -DDEFAULT_PORT=9000 -o client/client client/client.c -Llib -Wl,-rpath,'$ORIGIN/../lib' -lutil
+
+$ ldd server/server_robust
+	linux-vdso.so.1 (0x00007ffc819aa000)
+	libutil.so => /mnt/d/Coding/0_Projects/school_assignments/client-server-application-in-c/server/../lib/libutil.so (0x00007ddcacc68000)
+	libc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007ddcaca00000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007ddcacc75000)
+
+$ readelf -d client/client | grep -E "NEEDED|RUNPATH"
+ 0x0000000000000001 (NEEDED)             Shared library: [libutil.so]
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]
+ 0x000000000000001d (RUNPATH)            Library runpath: [$ORIGIN/../lib]
+
+$ strings server/server_naive | grep -c "debug log compiled in"   # make
+0
+$ strings server/server_naive | grep -c "debug log compiled in"   # make DEBUG=1
+1
+
+$ nm server/server_naive | grep -c sigchld ; nm server/server_robust | grep sigchld
+0
+0000000000001630 t sigchld_handler

@@ -1,0 +1,81 @@
+
+------------------------------------------------------------------
+server_robust pid=517 port=9000；同時啟動 12 個 client，每個保持 15 秒，指令：SYSINFO
+
+------------------------------------------------------------------
+$ ps --ppid 517 -o pid,stat,cmd
+    PID STAT CMD
+    534 S+   ./server/server_robust -p 9000 -t 45
+    535 S+   ./server/server_robust -p 9000 -t 45
+    536 S+   ./server/server_robust -p 9000 -t 45
+    537 S+   ./server/server_robust -p 9000 -t 45
+    538 S+   ./server/server_robust -p 9000 -t 45
+    539 S+   ./server/server_robust -p 9000 -t 45
+    540 S+   ./server/server_robust -p 9000 -t 45
+    541 S+   ./server/server_robust -p 9000 -t 45
+    542 S+   ./server/server_robust -p 9000 -t 45
+    543 S+   ./server/server_robust -p 9000 -t 45
+    544 S+   ./server/server_robust -p 9000 -t 45
+    545 S+   ./server/server_robust -p 9000 -t 45
+
+------------------------------------------------------------------
+$ ss -tn state established '( sport = :9000 )'
+Recv-Q Send-Q Local Address:Port Peer Address:Port 
+0      0          127.0.0.1:9000    127.0.0.1:42382
+0      0          127.0.0.1:9000    127.0.0.1:42362
+0      0          127.0.0.1:9000    127.0.0.1:42414
+0      0          127.0.0.1:9000    127.0.0.1:42332
+0      0          127.0.0.1:9000    127.0.0.1:42378
+0      0          127.0.0.1:9000    127.0.0.1:42380
+0      0          127.0.0.1:9000    127.0.0.1:42330
+0      0          127.0.0.1:9000    127.0.0.1:42412
+0      0          127.0.0.1:9000    127.0.0.1:42342
+0      0          127.0.0.1:9000    127.0.0.1:42410
+0      0          127.0.0.1:9000    127.0.0.1:42402
+0      0          127.0.0.1:9000    127.0.0.1:42406
+
+------------------------------------------------------------------
+$ server log（connected 紀錄）
+[INFO ][534][server/server.c:438] 127.0.0.1:42332 connected (child pid=534, connfd=4)
+[INFO ][535][server/server.c:438] 127.0.0.1:42330 connected (child pid=535, connfd=4)
+[INFO ][536][server/server.c:438] 127.0.0.1:42342 connected (child pid=536, connfd=4)
+[INFO ][537][server/server.c:438] 127.0.0.1:42362 connected (child pid=537, connfd=4)
+[INFO ][538][server/server.c:438] 127.0.0.1:42378 connected (child pid=538, connfd=4)
+[INFO ][539][server/server.c:438] 127.0.0.1:42380 connected (child pid=539, connfd=4)
+[INFO ][540][server/server.c:438] 127.0.0.1:42382 connected (child pid=540, connfd=4)
+[INFO ][541][server/server.c:438] 127.0.0.1:42406 connected (child pid=541, connfd=4)
+[INFO ][542][server/server.c:438] 127.0.0.1:42402 connected (child pid=542, connfd=4)
+[INFO ][543][server/server.c:438] 127.0.0.1:42412 connected (child pid=543, connfd=4)
+[INFO ][544][server/server.c:438] 127.0.0.1:42410 connected (child pid=544, connfd=4)
+[INFO ][545][server/server.c:438] 127.0.0.1:42414 connected (child pid=545, connfd=4)
+
+------------------------------------------------------------------
+$ 各 client 收到的回覆（節錄 child_pid）
+  client 1  server_pid=517;child_pid=544
+  client 2  server_pid=517;child_pid=539
+  client 3  server_pid=517;child_pid=545
+  client 4  server_pid=517;child_pid=538
+  client 5  server_pid=517;child_pid=541
+  client 6  server_pid=517;child_pid=537
+  client 7  server_pid=517;child_pid=540
+  client 8  server_pid=517;child_pid=543
+  client 9  server_pid=517;child_pid=542
+  client 10 server_pid=517;child_pid=535
+  client 11 server_pid=517;child_pid=536
+  client 12 server_pid=517;child_pid=534
+
+------------------------------------------------------------------
+等待 client 保持連線 15 秒後結束……
+
+------------------------------------------------------------------
+結果
+  ✔ 同時存在的子行程：12
+  ✔ ESTABLISHED 連線：12
+  ✔ log 中不同的子行程 pid：12
+  ✔ 回覆中不同的 child_pid：12
+  ✔ client 全部成功結束（exit 0）
+  ✔ log 中的 disconnected：12
+  總耗時 15.0 秒（若是逐一服務會需要 12 × 15 = 180 秒）
+  ✔ 結束後剩餘子行程：0（R1 已回收）
+
+------------------------------------------------------------------

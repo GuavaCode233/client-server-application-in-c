@@ -163,6 +163,7 @@ void log_write(int level, const char *file, int line, const char *fmt, ...);
 
 ### B11. 封包擷取與分析
 - 同機測試用 loopback：`sudo tcpdump -i lo -nn -A -s0 port 9000 -w docs/capture.pcap`（macOS 為 `lo0`）。
+  - 實作：`./scripts/capture.sh` 以 `unshare -rn`（使用者 + 網路命名空間）在私有的 loopback 上擷取，不需要 sudo；輸出到 `docs/capture/`。
 - 分析重點：
   1. 三向交握 `SYN → SYN-ACK → ACK`
   2. 資料封包 `PSH,ACK` 的內容：**可見為凱薩密文而非明文**（可與未加密對照）

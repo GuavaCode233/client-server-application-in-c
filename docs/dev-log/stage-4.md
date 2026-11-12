@@ -26,12 +26,12 @@
 
 ```text
 $ ./client/client SYSINFO
-OK hostname=GuavasPC;sysname=Linux;release=6.6.114.1-microsoft-standard-WSL2;machine=x86_64;uptime=66;totalram=7997587456;freeram=7050219520;procs=312;server_pid=423;child_pid=426
+OK hostname=REDACTED-HOSTNAME;sysname=Linux;release=6.6.114.1-microsoft-standard-WSL2;machine=x86_64;uptime=66;totalram=7997587456;freeram=7050219520;procs=312;server_pid=423;child_pid=426
 ```
 
 | 欄位 | server 回傳 | 系統工具 | 一致 |
 |---|---|---|---|
-| hostname | `GuavasPC` | `hostname` → `GuavasPC` | ✅ |
+| hostname | `REDACTED-HOSTNAME` | `hostname` → `REDACTED-HOSTNAME` | ✅ （實測兩者相同；真實主機名稱已以標籤取代，見 stage-8.md 第 6 點） |
 | sysname | `Linux` | `uname -s` | ✅ |
 | release | `6.6.114.1-microsoft-standard-WSL2` | `uname -r` | ✅ |
 | machine | `x86_64` | `uname -m` | ✅ |
@@ -66,7 +66,7 @@ SYSINFO extra   → ERR unknown command      ← 多了參數
 一次寫入：ECHO one \n SYSINFO \n QUIT \n ECHO after-quit \n
 收到：
 OK one
-OK hostname=GuavasPC;sysname=Linux;release=6.6.114.1-microso...
+OK hostname=REDACTED-HOSTNAME;sysname=Linux;release=6.6.114.1-microso...
 OK bye
 (cat ended -> server closed the connection)     ← "ECHO after-quit" 沒有被處理
 ```
@@ -105,7 +105,7 @@ Server log 節錄：
 
 | 欄位 | 意義 | 範例 |
 |---|---|---|
-| `nodename` | 主機名稱（網路上的名字） | `GuavasPC` |
+| `nodename` | 主機名稱（網路上的名字） | `REDACTED-HOSTNAME` |
 | `sysname` | 作業系統核心名稱 | `Linux` |
 | `release` | 核心版本 | `6.6.114.1-microsoft-standard-WSL2` |
 | `machine` | 硬體架構 | `x86_64` |

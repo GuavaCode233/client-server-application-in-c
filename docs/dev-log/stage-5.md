@@ -48,7 +48,7 @@ RESULT: ALL PASS
 
 ```text
 ECHO hello world      → OK hello world
-SYSINFO               → OK hostname=GuavasPC;sysname=Linux;release=6.6.114.1-...
+SYSINFO               → OK hostname=REDACTED-HOSTNAME;sysname=Linux;release=6.6.114.1-...
 HELLO                 → ERR unknown command
 QUIT                  → OK bye
 "ECHO ~ wrap {|}"     → OK ~ wrap {|}            ← 繞回邊界的字元也正確
@@ -65,7 +65,7 @@ client sent: HFKR#khoor#zruog$            ← $ 是 '\n'；空白變成 '#'
 
 ```text
 送出 'HFKR#khoor'（= ECHO hello）  → server raw reply: RN#khoor          （= OK hello）
-送出 'V\VLQIR'   （= SYSINFO）     → RN#krvwqdph@JxdydvSF>v|vqdph@Olqx{>uhohdvh@9191...
+送出 'V\VLQIR'   （= SYSINFO）     → RN#krvwqdph@UHGDFWHG0KRVWQDPH>v|vqdph@Olqx{>uhohdvh@9191...
 ```
 
 **W3 / K1. 金鑰不一致時無法溝通**

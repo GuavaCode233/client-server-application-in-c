@@ -6,5 +6,7 @@ server/server_robust
 client/client
 .cflags
 
-# 封包擷取檔（體積大，需要時再手動加入）
-docs/*.pcap
+# 封包擷取檔：docs/capture/ 下的示範檔很小（數 KB），是報告素材，所以納入版本控制；
+# 其他位置自行抓的 pcap 不追蹤
+*.pcap
+!docs/capture/*.pcap
