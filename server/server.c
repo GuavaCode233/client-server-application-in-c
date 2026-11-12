@@ -1,10 +1,12 @@
 /*
- * 階段 2：迭代式 echo server，改用 libutil.so 的 recv_line / send_line 與 log
+ * 階段 3：併發 echo server（每個 client 一個子行程）
  *
- * 流程：socket → setsockopt(SO_REUSEADDR) → bind → listen → 迴圈 accept
- *       → 對該 client 反覆「讀一行、回同一行」→ client 關閉後 close，回到 accept
+ * 流程：socket → setsockopt(SO_REUSEADDR) → bind → listen → 迴圈 accept → fork
+ *   子行程：close(listenfd) → 反覆「讀一行、回同一行」→ close(connfd) → exit(0)
+ *   父行程：close(connfd) → 立刻回到 accept 等下一個 client
  *
- * 仍是「迭代式」server：一次只服務一個 client。階段 3 才用 fork() 解決。
+ * 注意：此階段「刻意不處理 SIGCHLD」。子行程結束後父行程不會 wait，
+ * 會留下殭屍行程（ps 顯示 Z / <defunct>）。階段 6 的 R1 再用 robust 版修正並對照。
  *
  * Log 等級：
  *   執行期：環境變數 LOG_LEVEL=0|1|2，或 -v level（-v 優先）
@@ -17,7 +19,8 @@
 #include <stdlib.h>      /* strtol */
 #include <string.h>      /* strerror, memset */
 #include <sys/socket.h>
-#include <unistd.h>      /* close, getopt */
+#include <sys/types.h>   /* pid_t */
+#include <unistd.h>      /* close, getopt, fork, getpid */
 
 #include "util.h"
 
@@ -154,7 +157,8 @@ int main(int argc, char *argv[])
     LOG_D("debug log compiled in and enabled");
 
     /* 5. accept 迴圈：每次取出一條已建立的連線，得到一個「新的」fd（connfd）。
-     *    listenfd 繼續負責接新連線，connfd 專門跟這個 client 對話。 */
+     *    listenfd 繼續負責接新連線，connfd 專門跟這個 client 對話。
+     *    父行程只負責 accept + fork，真正的對話交給子行程，所以不會被單一 client 卡住。 */
     for (;;) {
         struct sockaddr_in cli;
         socklen_t clilen = sizeof(cli);
@@ -172,12 +176,44 @@ int main(int argc, char *argv[])
         char peer[INET_ADDRSTRLEN + 8];
         snprintf(peer, sizeof(peer), "%s:%u", ip, (unsigned)ntohs(cli.sin_port));
 
-        LOG_I("%s connected (connfd=%d)", peer, connfd);
-        handle_client(connfd, peer);
-        LOG_I("%s disconnected", peer);
+        /* 6. fork：複製出一個幾乎一模一樣的子行程，包括「fd 表」。
+         *    fork 之後，listenfd 與 connfd 在父、子兩邊「都」是開著的，
+         *    兩邊的 fd 指向核心中同一個 socket 物件（物件內有參考計數）。 */
+        pid_t pid = fork();
+        if (pid < 0) {
+            /* fork 失敗（例如行程數達上限）：這個 client 無法服務，關掉連線，server 繼續運作 */
+            LOG_E("fork for %s: %s", peer, strerror(errno));
+            close(connfd);
+            continue;
+        }
 
-        if (close(connfd) < 0)   /* 不 close 會造成 fd 洩漏，對方也收不到 FIN */
-            LOG_E("close(%d): %s", connfd, strerror(errno));
+        if (pid == 0) {
+            /* ===== 子行程 ===== */
+            /* 子行程不負責接新連線，關掉自己那份 listenfd。
+             * 不關的話：每個子行程都握著監聽 socket，父行程結束後 port 仍被佔住，
+             * 而且浪費 fd。 */
+            if (close(listenfd) < 0)
+                LOG_E("child close(listenfd): %s", strerror(errno));
+
+            LOG_I("%s connected (child pid=%d, connfd=%d)", peer, (int)getpid(), connfd);
+            handle_client(connfd, peer);
+            LOG_I("%s disconnected", peer);
+
+            if (close(connfd) < 0)
+                LOG_E("close(%d): %s", connfd, strerror(errno));
+            /* 子行程一定要在這裡結束，否則會掉回 for 迴圈去 accept，
+             * 變成「子行程也在當 server」。 */
+            exit(0);
+        }
+
+        /* ===== 父行程 ===== */
+        /* 父行程不跟這個 client 對話，關掉自己那份 connfd。
+         * 這「非常重要」：socket 的參考計數要降到 0，核心才會真的送出 FIN。
+         * 父行程若不關，子行程 close 之後連線仍不會關閉（client 收不到 EOF），
+         * 而且每個連線洩漏一個 fd，很快就會用完（EMFILE）。 */
+        LOG_D("forked child pid=%d for %s", (int)pid, peer);
+        if (close(connfd) < 0)
+            LOG_E("parent close(connfd=%d): %s", connfd, strerror(errno));
     }
 
     /* 不會到這裡；階段 6 之後會用 SIGINT 處理優雅結束 */
