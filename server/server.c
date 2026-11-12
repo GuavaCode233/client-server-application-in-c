@@ -1,9 +1,16 @@
 /*
- * 階段 3：併發 echo server（每個 client 一個子行程）
+ * 階段 4：併發 server，支援 SYSINFO / ECHO / QUIT 指令（CONTEXT.md B3）
  *
  * 流程：socket → setsockopt(SO_REUSEADDR) → bind → listen → 迴圈 accept → fork
- *   子行程：close(listenfd) → 反覆「讀一行、回同一行」→ close(connfd) → exit(0)
+ *   子行程：close(listenfd) → 反覆「讀一行指令、回一行結果」→ close(connfd) → exit(0)
  *   父行程：close(connfd) → 立刻回到 accept 等下一個 client
+ *
+ * 指令（每則一行）：
+ *   SYSINFO       → OK hostname=..;sysname=..;release=..;machine=..;uptime=..;
+ *                       totalram=..;freeram=..;procs=..;server_pid=..;child_pid=..
+ *   ECHO <text>   → OK <text>
+ *   QUIT          → OK bye，然後 server 關閉連線
+ *   其他          → ERR unknown command
  *
  * 注意：此階段「刻意不處理 SIGCHLD」。子行程結束後父行程不會 wait，
  * 會留下殭屍行程（ps 顯示 Z / <defunct>）。階段 6 的 R1 再用 robust 版修正並對照。
@@ -19,7 +26,9 @@
 #include <stdlib.h>      /* strtol */
 #include <string.h>      /* strerror, memset */
 #include <sys/socket.h>
+#include <sys/sysinfo.h> /* sysinfo()：Linux 專用 */
 #include <sys/types.h>   /* pid_t */
+#include <sys/utsname.h> /* uname() */
 #include <unistd.h>      /* close, getopt, fork, getpid */
 
 #include "util.h"
@@ -40,10 +49,88 @@ static int parse_int(const char *s, int max)
     return (int)v;
 }
 
-/* 服務單一 client：讀一行，原樣送回，直到對方關閉。 */
+/* 父行程的 pid：在 fork 之前記下來，子行程回報 server_pid 時使用。
+ * 為什麼不在子行程用 getppid()？父行程若先結束，子行程會被 init 收養，
+ * getppid() 就會變成 1，回報的值不再是「server 的 pid」。 */
+static pid_t g_server_pid;
+
+/*
+ * 產生 SYSINFO 的回應（不含 '\n'）。成功回傳 0，失敗回傳 -1。
+ *
+ * uname()  ：核心的識別資訊（主機名稱、OS 名稱、核心版本、硬體架構）
+ * sysinfo()：核心的即時統計（開機秒數、記憶體、行程數）
+ * 兩者都是「直接問核心」的系統呼叫，不需要讀檔或執行外部指令。
+ */
+static int build_sysinfo(char *out, size_t outlen)
+{
+    struct utsname u;
+    if (uname(&u) < 0) {
+        LOG_E("uname: %s", strerror(errno));
+        return -1;
+    }
+
+    struct sysinfo si;
+    if (sysinfo(&si) < 0) {
+        LOG_E("sysinfo: %s", strerror(errno));
+        return -1;
+    }
+
+    /* totalram / freeram 的單位是 mem_unit bytes，不一定是 1。
+     * 先轉成 unsigned long long 再相乘，避免 32 位元平台上溢位。 */
+    unsigned long long unit     = si.mem_unit ? si.mem_unit : 1;
+    unsigned long long totalram = (unsigned long long)si.totalram * unit;
+    unsigned long long freeram  = (unsigned long long)si.freeram  * unit;
+
+    int w = snprintf(out, outlen,
+                     "OK hostname=%s;sysname=%s;release=%s;machine=%s;"
+                     "uptime=%ld;totalram=%llu;freeram=%llu;procs=%u;"
+                     "server_pid=%d;child_pid=%d",
+                     u.nodename, u.sysname, u.release, u.machine,
+                     (long)si.uptime, totalram, freeram, (unsigned)si.procs,
+                     (int)g_server_pid, (int)getpid());
+    if (w < 0 || (size_t)w >= outlen) {   /* 被截斷：回應不能超過一行上限 */
+        LOG_E("SYSINFO reply too long (%d bytes)", w);
+        return -1;
+    }
+    return 0;
+}
+
+/*
+ * 解析並執行一行指令，把回應寫進 reply（不含 '\n'）。
+ * 回傳 1 = 回應後應關閉連線（QUIT）；0 = 繼續讀下一行。
+ *
+ * 比對規則刻意保持嚴格、簡單：
+ *   - 大小寫敏感（"sysinfo" 視為未知指令）
+ *   - ECHO 必須是 "ECHO " + 文字；"ECHO " 後面的內容原樣回傳（包含空白）
+ */
+static int dispatch(const char *cmd, char *reply, size_t replylen)
+{
+    if (strcmp(cmd, "SYSINFO") == 0) {
+        if (build_sysinfo(reply, replylen) < 0)
+            snprintf(reply, replylen, "ERR internal error");
+        return 0;
+    }
+
+    if (strncmp(cmd, "ECHO ", 5) == 0) {
+        /* 長度一定放得下：指令最長 MAX_LINE-2 bytes，扣掉 "ECHO " 後再加 "OK " 只會更短 */
+        snprintf(reply, replylen, "OK %s", cmd + 5);
+        return 0;
+    }
+
+    if (strcmp(cmd, "QUIT") == 0) {
+        snprintf(reply, replylen, "OK bye");
+        return 1;
+    }
+
+    snprintf(reply, replylen, "ERR unknown command");
+    return 0;
+}
+
+/* 服務單一 client：讀一行指令、回一行結果，直到 QUIT 或對方關閉。 */
 static void handle_client(int connfd, const char *peer)
 {
     char line[MAX_LINE];
+    char reply[MAX_LINE];
     ssize_t n;
 
     for (;;) {
@@ -60,15 +147,26 @@ static void handle_client(int connfd, const char *peer)
             return;
         }
 
-        line[n - 1] = '\0';   /* 去掉 '\n'：協定層的邊界，不是內容的一部分 */
-        LOG_I("%s recv: %s", peer, line);
-        LOG_D("%s recv %zd bytes (incl. newline)", peer, n);
+        line[--n] = '\0';     /* 去掉 '\n'：協定層的邊界，不是內容的一部分 */
+        /* 也去掉行尾的 '\r'：telnet 等工具送出的是 "\r\n"，
+         * 不去掉的話 "QUIT\r" 會被判成未知指令。 */
+        if (n > 0 && line[n - 1] == '\r')
+            line[--n] = '\0';
 
-        if (send_line(connfd, line) < 0) {
+        LOG_I("%s cmd: %s", peer, line);
+
+        int quit = dispatch(line, reply, sizeof(reply));
+
+        if (send_line(connfd, reply) < 0) {
             LOG_E("%s send_line: %s", peer, strerror(errno));
             return;
         }
-        LOG_D("%s sent reply", peer);
+        LOG_D("%s reply: %s", peer, reply);
+
+        if (quit) {
+            LOG_I("%s requested QUIT", peer);
+            return;           /* 呼叫端會 close(connfd)，對方因此收到 FIN */
+        }
     }
 }
 
@@ -153,6 +251,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    g_server_pid = getpid();   /* fork 之前記下；子行程會繼承這個值的複本 */
     LOG_I("server (%s, %s) listening on port %d", variant, util_version(), port);
     LOG_D("debug log compiled in and enabled");
 
@@ -196,6 +295,8 @@ int main(int argc, char *argv[])
                 LOG_E("child close(listenfd): %s", strerror(errno));
 
             LOG_I("%s connected (child pid=%d, connfd=%d)", peer, (int)getpid(), connfd);
+            /* 子行程「繼承」父行程的 log 等級與 g_server_pid：fork 複製了整個記憶體，
+             * 所以不需要任何額外的傳遞機制。 */
             handle_client(connfd, peer);
             LOG_I("%s disconnected", peer);
 
