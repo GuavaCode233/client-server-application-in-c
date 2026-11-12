@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Concurrent Client–Server Application in C — Midterm Report</title>
+<style>
+  /* ---------- page setup (printed with Edge/Chromium headless) ---------- */
+  @page {
+    size: A4;
+    margin: 20mm 18mm 20mm 18mm;
+    @bottom-center { content: counter(page); font: 9pt "Segoe UI", "Microsoft JhengHei", sans-serif; color: #666; }
+  }
+  @page :first { @bottom-center { content: none; } }
+
+  :root {
+    --ink: #1d232a;
+    --muted: #5a6470;
+    --rule: #d5dbe1;
+    --accent: #1f5f99;
+    --accent-soft: #eaf2fa;
+    --zh-bg: #f6f7f9;
+    --code-bg: #f3f5f7;
+    --ok: #2e7d32;
+    --bad: #b3261e;
+  }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.5;
+    color: var(--ink);
+    background: #fff;
+    margin: 0;
+  }
+  h1, h2, h3 { color: var(--ink); line-height: 1.25; break-after: avoid; }
+  h2 {
+    font-size: 16pt; margin: 0 0 8pt; padding-bottom: 4pt;
+    border-bottom: 2px solid var(--accent); break-before: page;
+  }
+  h2 .zh, h3 .zh { color: var(--muted); font-weight: 600; font-size: 0.82em; margin-left: 6pt; }
+  h3 { font-size: 12pt; margin: 14pt 0 4pt; color: var(--accent); }
+  p { margin: 0 0 7pt; text-align: justify; }
+  ul, ol { margin: 0 0 7pt; padding-left: 18pt; }
+  li { margin-bottom: 2pt; }
+  code, pre, .mono { font-family: Consolas, "Cascadia Mono", monospace; }
+  code { font-size: 9.2pt; background: var(--code-bg); padding: 0 2pt; border-radius: 2px; }
+  pre {
+    font-size: 8.6pt; line-height: 1.38; background: var(--code-bg);
+    border-left: 3px solid var(--rule); padding: 6pt 8pt; margin: 4pt 0 9pt;
+    white-space: pre-wrap; break-inside: avoid;
+  }
+  pre .c { color: #4d7a4d; }
+  table { border-collapse: collapse; width: 100%; margin: 4pt 0 10pt; font-size: 9.4pt; break-inside: avoid; }
+  th, td { border: 1px solid var(--rule); padding: 3pt 6pt; vertical-align: top; text-align: left; }
+  th { background: var(--accent-soft); font-weight: 600; }
+  td.ok { color: var(--ok); font-weight: 600; }
+  td.bad { color: var(--bad); font-weight: 600; }
+  figure { margin: 6pt 0 12pt; break-inside: avoid; text-align: center; }
+  figure img { max-width: 100%; border: 1px solid var(--rule); }
+  figure img.half { max-width: 49%; vertical-align: top; }
+  figure svg { max-width: 100%; height: auto; }
+  figcaption { font-size: 9pt; color: var(--muted); margin-top: 3pt; }
+  figcaption b { color: var(--ink); }
+  .zh-summary {
+    background: var(--zh-bg); border-left: 3px solid var(--accent);
+    padding: 6pt 9pt; margin: 10pt 0 0; font-size: 9.6pt; break-inside: avoid;
+  }
+  .zh-summary b { color: var(--accent); }
+  .note { font-size: 9.2pt; color: var(--muted); }
+  .pair { display: flex; gap: 6pt; align-items: flex-start; }
+  .pair > figure { flex: 1; margin: 0; }
+  /* show only the top part of a tall screenshot (e.g. the Wireshark packet list) */
+  .crop { overflow: hidden; border: 1px solid var(--rule); }
+  .crop img { display: block; border: 0; width: 100%; }
+
+  /* ---------- cover ---------- */
+  .cover { height: 245mm; display: flex; flex-direction: column; justify-content: center; }
+  .cover .course { color: var(--accent); font-weight: 600; letter-spacing: 0.04em; font-size: 11pt; }
+  .cover h1 { font-size: 26pt; margin: 6pt 0 4pt; border: 0; }
+  .cover .sub { font-size: 14pt; color: var(--muted); margin-bottom: 26pt; }
+  .cover table { width: auto; font-size: 10.5pt; }
+  .cover td { border: 0; padding: 2pt 14pt 2pt 0; }
+  .cover td:first-child { color: var(--muted); }
+  .toc { margin-top: 30pt; font-size: 10pt; columns: 2; column-gap: 24pt; }
+  .toc ol { padding-left: 16pt; }
+</style>
+</head>
+<body>
+
+<!-- ============================== COVER ============================== -->
+<section class="cover">
+  <div class="course">Network System Programming and Security · Midterm Project</div>
+  <div class="course">網路系統程式開發與安全 · 期中專案</div>
+  <h1>A Concurrent Client–Server Application in C</h1>
+  <div class="sub">fork-based TCP server, shared library, Caesar-encrypted protocol, and robustness mechanisms<br>
+    以 fork 實作的併發 TCP 伺服器、動態函式庫、凱薩加密協定與強健性機制</div>
+  <table>
+    <tr><td>Student 學生</td><td>{{NAME}} ({{STUDENT_ID}})</td></tr>
+    <tr><td>Date 日期</td><td>November 2026</td></tr>
+    <tr><td>Platform 平台</td><td>Ubuntu 26.04 on WSL2 · gcc 15.2 · GNU Make 4.4</td></tr>
+    <tr><td>Repository 原始碼</td><td class="mono">github.com/GuavaCode233/client-server-application-in-c</td></tr>
+  </table>
+  <div class="toc">
+    <ol>
+      <li>Introduction</li>
+      <li>System Design</li>
+      <li>Implementation</li>
+      <li>Concurrency Evidence</li>
+      <li>Robustness: naive vs. robust</li>
+      <li>Packet Capture and Analysis</li>
+      <li>Security Discussion</li>
+      <li>Testing Summary</li>
+      <li>Conclusion</li>
+      <li>Appendix: AI Usage Statement</li>
+    </ol>
+  </div>
+</section>
+
+<!-- ============================== 1 ============================== -->
+<h2>1. Introduction <span class="zh">簡介</span></h2>
+
+<p>This project implements a TCP client–server system on Linux in C. The server waits for connections and creates one child process per client with <code>fork()</code>. Client and server exchange single-line text messages, and every line is encrypted with a Caesar cipher before it is sent. Code shared by both programs (network I/O, encryption and logging) is packaged as a dynamic shared library, <code>libutil.so</code>.</p>
+
+<p>The project goals, taken from the course specification, are:</p>
+<ul>
+  <li><b>Concurrency without threads</b>: serve at least 10 clients at the same time using <code>fork()</code> only.</li>
+  <li><b>A shared library</b>: build <code>libutil.so</code> with <code>-fPIC -shared</code> and link both programs against it.</li>
+  <li><b>Two-layer debug logging</b>: a compile-time switch and a run-time log level.</li>
+  <li><b>Robustness</b>: handle zombie processes (R1), writes to a disconnected peer (R2) and idle clients (R3), and demonstrate each one with a naive vs. robust comparison.</li>
+  <li><b>Security awareness</b>: encrypt traffic with a Caesar cipher, show the ciphertext in a packet capture, and explain why the cipher is not secure.</li>
+</ul>
+
+<p>Development followed nine stages (0–8). Each stage changed one thing, was compiled and tested in WSL, and was recorded in <code>docs/dev-log/stage-N.md</code>. This report summarises the design, the key implementation choices and the evidence collected.</p>
+
+<table>
+  <tr><th>Stage</th><th>Content</th><th>Acceptance check</th></tr>
+  <tr><td>0</td><td>Directory layout, Makefile, empty <code>libutil.so</code></td><td><code>make</code> succeeds; <code>ldd</code> lists the library</td></tr>
+  <tr><td>1</td><td>Minimal iterative echo server and client</td><td>One line sent and echoed</td></tr>
+  <tr><td>2</td><td><code>send_all</code> / <code>recv_line</code> and two-layer logging in the library</td><td><code>make</code> vs. <code>make DEBUG=1</code> differ; <code>LOG_LEVEL</code> works</td></tr>
+  <tr><td>3</td><td><code>fork()</code> per client, without <code>SIGCHLD</code> handling</td><td>Two concurrent clients; zombies observed</td></tr>
+  <tr><td>4</td><td><code>SYSINFO</code>, <code>ECHO</code>, <code>QUIT</code></td><td>Replies are correct</td></tr>
+  <tr><td>5</td><td>Two-way Caesar encryption</td><td>Ciphertext on the wire; results correct on both ends</td></tr>
+  <tr><td>6</td><td>R1, R2, R3 behind the <code>ROBUST</code> macro</td><td>Three reproducible comparisons</td></tr>
+  <tr><td>7</td><td>Stress-test script, 10+ concurrent clients</td><td>Verified with <code>ps</code>, <code>ss</code> and the server log</td></tr>
+  <tr><td>8</td><td>Packet capture and report materials</td><td>Screenshots complete</td></tr>
+</table>
+
+<div class="zh-summary"><b>中文摘要</b>　本專案以 C 語言在 Linux 上實作 TCP client–server：server 以 <code>fork()</code> 為每個 client 建立子行程，雙方以單行文字訊息溝通，每行皆經凱薩加密；共用的網路 I/O、加密與 log 函式編成 <code>libutil.so</code>。開發分為 0–8 九個階段，每階段只做一件事並實際編譯測試，紀錄於 <code>docs/dev-log/</code>。</div>
+
+<!-- ============================== 2 ============================== -->
+<h2>2. System Design <span class="zh">系統設計</span></h2>
+
+<h3>2.1 Architecture <span class="zh">架構</span></h3>
+
+<figure>
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Microsoft JhengHei, sans-serif" font-size="12">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1f5f99"/>
+    </marker>
+  </defs>
+  <!-- clients -->
+  <g>
+    <rect x="10" y="30" width="120" height="40" rx="6" fill="#eaf2fa" stroke="#1f5f99"/>
+    <text x="70" y="55" text-anchor="middle">client #1</text>
+    <rect x="10" y="90" width="120" height="40" rx="6" fill="#eaf2fa" stroke="#1f5f99"/>
+    <text x="70" y="115" text-anchor="middle">client #2</text>
+    <text x="70" y="152" text-anchor="middle" fill="#5a6470">⋮</text>
+    <rect x="10" y="170" width="120" height="40" rx="6" fill="#eaf2fa" stroke="#1f5f99"/>
+    <text x="70" y="195" text-anchor="middle">client #N</text>
+  </g>
+  <!-- parent -->
+  <rect x="250" y="20" width="170" height="70" rx="6" fill="#fff" stroke="#1d232a"/>
+  <text x="335" y="44" text-anchor="middle" font-weight="600">server (parent)</text>
+  <text x="335" y="62" text-anchor="middle" font-size="11">listenfd · port 9000</text>
+  <text x="335" y="78" text-anchor="middle" font-size="11">accept() → fork()</text>
+  <!-- children -->
+  <rect x="250" y="120" width="170" height="36" rx="6" fill="#fff" stroke="#1d232a"/>
+  <text x="335" y="143" text-anchor="middle">child #1 · connfd</text>
+  <rect x="250" y="165" width="170" height="36" rx="6" fill="#fff" stroke="#1d232a"/>
+  <text x="335" y="188" text-anchor="middle">child #2 · connfd</text>
+  <rect x="250" y="210" width="170" height="36" rx="6" fill="#fff" stroke="#1d232a"/>
+  <text x="335" y="233" text-anchor="middle">child #N · connfd</text>
+  <!-- connect arrows -->
+  <line x1="130" y1="50" x2="248" y2="50" stroke="#1f5f99" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+  <text x="190" y="44" text-anchor="middle" font-size="10" fill="#1f5f99">connect (SYN)</text>
+  <line x1="130" y1="110" x2="248" y2="138" stroke="#1f5f99" marker-end="url(#ar)" marker-start="url(#ar)"/>
+  <line x1="130" y1="120" x2="248" y2="183" stroke="#1f5f99" marker-end="url(#ar)" marker-start="url(#ar)"/>
+  <line x1="130" y1="190" x2="248" y2="228" stroke="#1f5f99" marker-end="url(#ar)" marker-start="url(#ar)"/>
+  <text x="168" y="236" font-size="10" fill="#1f5f99">encrypted lines</text>
+  <!-- fork arrows -->
+  <path d="M420,62 C470,62 470,138 422,138" fill="none" stroke="#1d232a" marker-end="url(#ar)"/>
+  <path d="M420,70 C490,70 490,183 422,183" fill="none" stroke="#1d232a" marker-end="url(#ar)"/>
+  <path d="M420,78 C510,78 510,228 422,228" fill="none" stroke="#1d232a" marker-end="url(#ar)"/>
+  <text x="470" y="100" font-size="11">fork()</text>
+  <!-- library -->
+  <rect x="555" y="80" width="155" height="130" rx="6" fill="#f6f7f9" stroke="#5a6470"/>
+  <text x="632" y="102" text-anchor="middle" font-weight="600">libutil.so</text>
+  <text x="565" y="124" font-size="11">caesar_encrypt / decrypt</text>
+  <text x="565" y="142" font-size="11">send_all · send_line</text>
+  <text x="565" y="160" font-size="11">recv_line (MSG_PEEK)</text>
+  <text x="565" y="178" font-size="11">log_write · LOG_E/I/D</text>
+  <text x="565" y="196" font-size="11" fill="#5a6470">loaded via rpath</text>
+  <line x1="520" y1="145" x2="553" y2="145" stroke="#5a6470" stroke-dasharray="3 3"/>
+  <text x="335" y="275" text-anchor="middle" font-size="11" fill="#5a6470">parent only accepts and forks; each child serves exactly one client, then exits</text>
+</svg>
+<figcaption><b>Figure 1.</b> Process architecture. The parent owns the listening socket; each accepted connection is handed to a new child process.</figcaption>
+</figure>
+
+<p>The parent process does only two things: <code>accept()</code> a connection and <code>fork()</code> a child to serve it. It never reads from or writes to a client, so a slow or idle client cannot block new connections. Each child owns exactly one connected socket, serves one client until <code>QUIT</code> or disconnection, and exits. Both programs load <code>libutil.so</code> at run time.</p>
+
+<h3>2.2 Protocol <span class="zh">通訊協定</span></h3>
+
+<p>TCP is a byte stream with no message boundaries: one <code>send()</code> may arrive in several <code>recv()</code> calls, and two sends may arrive together. The protocol therefore defines its own framing: <b>every message is one line terminated by <code>\n</code></b>, every reply is exactly one line, and a line may be at most <code>MAX_LINE = 1024</code> bytes including the newline.</p>
+
+<table>
+  <colgroup><col style="width: 26%"><col></colgroup>
+  <tr><th>Command (client → server)</th><th>Reply (server → client)</th></tr>
+  <tr><td><code>SYSINFO</code></td><td style="word-break: break-all"><code>OK hostname=..;sysname=..;release=..;machine=..;uptime=..;totalram=..;freeram=..;procs=..;server_pid=..;child_pid=..</code></td></tr>
+  <tr><td><code>ECHO &lt;text&gt;</code></td><td><code>OK &lt;text&gt;</code></td></tr>
+  <tr><td><code>QUIT</code></td><td><code>OK bye</code>, then the server closes the connection</td></tr>
+  <tr><td>anything else</td><td><code>ERR unknown command</code></td></tr>
+</table>
+
+<figure>
+<svg viewBox="0 0 720 150" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Microsoft JhengHei, sans-serif" font-size="11">
+  <defs>
+    <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1d232a"/>
+    </marker>
+  </defs>
+  <g text-anchor="middle">
+    <rect x="5" y="20" width="120" height="44" rx="5" fill="#eaf2fa" stroke="#1f5f99"/>
+    <text x="65" y="38">client input</text><text x="65" y="54" font-family="Consolas, monospace">ECHO hello</text>
+    <rect x="150" y="20" width="120" height="44" rx="5" fill="#fff" stroke="#1d232a"/>
+    <text x="210" y="38">caesar_encrypt(k=3)</text><text x="210" y="54">+ send_line adds \n</text>
+    <rect x="295" y="20" width="130" height="44" rx="5" fill="#fff3e0" stroke="#e08a00"/>
+    <text x="360" y="38">on the wire</text><text x="360" y="54" font-family="Consolas, monospace">HFKR#khoor\n</text>
+    <rect x="450" y="20" width="120" height="44" rx="5" fill="#fff" stroke="#1d232a"/>
+    <text x="510" y="38">recv_line (split at \n)</text><text x="510" y="54">+ caesar_decrypt</text>
+    <rect x="595" y="20" width="120" height="44" rx="5" fill="#eaf2fa" stroke="#1f5f99"/>
+    <text x="655" y="38">dispatch()</text><text x="655" y="54" font-family="Consolas, monospace">ECHO hello</text>
+  </g>
+  <line x1="125" y1="42" x2="148" y2="42" stroke="#1d232a" marker-end="url(#ar2)"/>
+  <line x1="270" y1="42" x2="293" y2="42" stroke="#1d232a" marker-end="url(#ar2)"/>
+  <line x1="425" y1="42" x2="448" y2="42" stroke="#1d232a" marker-end="url(#ar2)"/>
+  <line x1="570" y1="42" x2="593" y2="42" stroke="#1d232a" marker-end="url(#ar2)"/>
+  <text x="360" y="95" text-anchor="middle" fill="#5a6470">The reply takes the reverse path: OK hello → RN#khoor\n → client decrypts → prints "OK hello".</text>
+  <text x="360" y="115" text-anchor="middle" fill="#5a6470">Ciphertext stays within ASCII 32–126, so it can never contain \n and framing is unaffected.</text>
+</svg>
+<figcaption><b>Figure 2.</b> Data path of one request. Encryption applies to the line content only; <code>\n</code> belongs to the protocol layer.</figcaption>
+</figure>
+
+<h3>2.3 Server flow <span class="zh">伺服器流程</span></h3>
+
+<figure>
+<svg viewBox="0 0 720 340" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Microsoft JhengHei, sans-serif" font-size="11">
+  <defs>
+    <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1d232a"/>
+    </marker>
+  </defs>
+  <!-- left column: setup, accept, fork, parent -->
+  <g text-anchor="middle">
+    <rect x="40" y="10" width="220" height="26" rx="4" fill="#fff" stroke="#1d232a"/><text x="150" y="27">socket(AF_INET, SOCK_STREAM)</text>
+    <rect x="40" y="48" width="220" height="26" rx="4" fill="#fff" stroke="#1d232a"/><text x="150" y="65">setsockopt(SO_REUSEADDR)</text>
+    <rect x="40" y="86" width="220" height="26" rx="4" fill="#fff" stroke="#1d232a"/><text x="150" y="103">bind(INADDR_ANY:9000) → listen(16)</text>
+    <rect x="40" y="124" width="220" height="26" rx="4" fill="#f6f7f9" stroke="#5a6470"/><text x="150" y="141">[robust] sigaction(SIGCHLD, SIGPIPE)</text>
+    <rect x="40" y="170" width="220" height="30" rx="15" fill="#eaf2fa" stroke="#1f5f99"/><text x="150" y="189" font-weight="600">accept() → connfd</text>
+    <polygon points="150,216 215,242 150,268 85,242" fill="#fff" stroke="#1d232a"/><text x="150" y="246">fork()</text>
+    <rect x="65" y="292" width="170" height="28" rx="4" fill="#fff" stroke="#1d232a"/><text x="150" y="310">parent: close(connfd)</text>
+  </g>
+  <!-- right column: child -->
+  <g text-anchor="middle">
+    <rect x="440" y="20" width="260" height="26" rx="4" fill="#fff" stroke="#1d232a"/><text x="570" y="37">child: close(listenfd)</text>
+    <rect x="440" y="58" width="260" height="26" rx="4" fill="#f6f7f9" stroke="#5a6470"/><text x="570" y="75">[robust] setsockopt(SO_RCVTIMEO)</text>
+    <rect x="440" y="96" width="260" height="56" rx="4" fill="#fff" stroke="#1d232a"/>
+    <text x="570" y="113">loop: recv_line → decrypt → dispatch</text>
+    <text x="570" y="129">→ encrypt → send_line</text>
+    <text x="570" y="145" fill="#5a6470">until QUIT / EOF / error / timeout</text>
+    <rect x="440" y="166" width="260" height="26" rx="4" fill="#fff" stroke="#1d232a"/><text x="570" y="183">close(connfd) → exit(0)</text>
+    <text x="570" y="214" fill="#5a6470">→ SIGCHLD to parent</text>
+    <text x="570" y="229" fill="#5a6470">(robust: reaped by the waitpid loop)</text>
+  </g>
+  <g stroke="#1d232a" fill="none">
+    <!-- setup chain -->
+    <line x1="150" y1="36" x2="150" y2="46" marker-end="url(#ar3)"/>
+    <line x1="150" y1="74" x2="150" y2="84" marker-end="url(#ar3)"/>
+    <line x1="150" y1="112" x2="150" y2="122" marker-end="url(#ar3)"/>
+    <line x1="150" y1="150" x2="150" y2="168" marker-end="url(#ar3)"/>
+    <line x1="150" y1="200" x2="150" y2="214" marker-end="url(#ar3)"/>
+    <!-- parent: fork -> close(connfd) -> back to accept -->
+    <line x1="150" y1="268" x2="150" y2="290" marker-end="url(#ar3)"/>
+    <polyline points="65,306 20,306 20,185 38,185" marker-end="url(#ar3)"/>
+    <!-- child: fork -> right -> up -> child column -->
+    <polyline points="215,242 390,242 390,33 438,33" marker-end="url(#ar3)"/>
+    <!-- child chain -->
+    <line x1="570" y1="46" x2="570" y2="56" marker-end="url(#ar3)"/>
+    <line x1="570" y1="84" x2="570" y2="94" marker-end="url(#ar3)"/>
+    <line x1="570" y1="152" x2="570" y2="164" marker-end="url(#ar3)"/>
+  </g>
+  <text x="160" y="284" font-size="10" fill="#5a6470">pid &gt; 0 (parent)</text>
+  <text x="300" y="236" font-size="10" fill="#5a6470" text-anchor="middle">pid == 0 (child)</text>
+  <text x="12" y="246" font-size="10" fill="#5a6470" transform="rotate(-90 12 246)" text-anchor="middle">back to accept</text>
+</svg>
+<figcaption><b>Figure 3.</b> Server flow. Grey boxes exist only in the robust build (<code>-DROBUST</code>).</figcaption>
+</figure>
+
+<div class="zh-summary"><b>中文摘要</b>　父行程只負責 <code>accept()</code> 與 <code>fork()</code>，不與 client 對話，因此單一 client 卡住不影響新連線；每個子行程只服務一個 client。TCP 沒有訊息邊界，所以協定規定「一行（以 <code>\n</code> 結尾）＝一則訊息」，回應固定單行、上限 1024 bytes。加密只作用於行的內容，密文落在 ASCII 32–126，不會產生 <code>\n</code>，不影響切行。</div>
+
+<!-- ============================== 3 ============================== -->
+<h2>3. Implementation <span class="zh">關鍵程式碼說明</span></h2>
+
+<h3>3.1 fork() and file-descriptor handling <span class="zh">fork 與 fd 處理</span></h3>
+
+<pre>pid_t pid = fork();
+if (pid == 0) {                       <span class="c">/* child */</span>
+    close(listenfd);                  <span class="c">/* the child never accepts */</span>
+    handle_client(connfd, peer);
+    close(connfd);
+    exit(0);                          <span class="c">/* never fall back into the accept loop */</span>
+}
+close(connfd);                        <span class="c">/* parent: the child owns this connection now */</span></pre>
+
+<p><code>fork()</code> copies the process's file-descriptor table, not the sockets themselves, so after the fork both processes refer to the same kernel socket objects and each socket's reference count is 2. The kernel only sends FIN once a socket's reference count drops to zero, which makes both <code>close()</code> calls essential:</p>
+<ul>
+  <li>If the <b>parent keeps <code>connfd</code></b>, the connection never closes after the child exits (the client never sees EOF), and the parent leaks one descriptor per client until <code>accept()</code> fails with <code>EMFILE</code>.</li>
+  <li>If the <b>child keeps <code>listenfd</code></b>, every child holds the listening port; after the parent dies the port stays occupied and new servers cannot <code>bind()</code>.</li>
+</ul>
+<p>Inspecting <code>/proc/&lt;pid&gt;/fd</code> during testing confirmed that the parent held only the listening socket (fd 3) and each child held only its connection (fd 4). The server PID is recorded <i>before</i> forking and inherited by each child through the copied memory. Calling <code>getppid()</code> in the child instead would return the init process if the parent had already died.</p>
+
+<h3>3.2 Shared library and run-time linking <span class="zh">動態函式庫</span></h3>
+
+<pre>gcc -fPIC -shared -o lib/libutil.so lib/util.c -Iinclude
+gcc -o server/server_robust server/server.c -DROBUST -Llib -lutil -Wl,-rpath,'$ORIGIN/../lib'</pre>
+
+<p><code>-fPIC</code> produces position-independent code, so the library works at whatever address it is mapped to, and <code>-shared</code> emits a shared object instead of an executable. The executable records only a <code>NEEDED libutil.so</code> entry; at start-up the dynamic linker (<code>ld-linux</code>) locates and maps the library. The <code>RUNPATH</code> of <code>$ORIGIN/../lib</code>, where <code>$ORIGIN</code> means "the directory of this executable", lets the programs find the library from any working directory and on any machine without setting <code>LD_LIBRARY_PATH</code> (Figure 4).</p>
+<p>One pitfall: Ubuntu's gcc links with <code>--as-needed</code> by default, which drops a library the executable never calls. Even in stage 0 the "empty" library therefore exported one real function, so that <code>ldd</code> could show the dependency.</p>
+
+<figure>
+  <img src="../screenshots/d1-ldd.png" alt="ldd output">
+  <figcaption><b>Figure 4.</b> <code>ldd server/server_robust</code> resolves <code>libutil.so</code> through the rpath <code>server/../lib</code>.</figcaption>
+</figure>
+
+<h3>3.3 Message framing: send_all and recv_line <span class="zh">訊息邊界</span></h3>
+<p><code>send()</code> only guarantees that <i>some</i> bytes were copied into the kernel send buffer, so <code>send_all()</code> loops until every byte is sent and retries on <code>EINTR</code>. Reading is harder: reading one byte per <code>recv()</code> is correct but slow, while reading a large block may consume the beginning of the next line, which would then have to be kept in hidden per-descriptor state. <code>recv_line()</code> avoids both problems with <code>MSG_PEEK</code>:</p>
+<ol>
+  <li>Peek at the available data without removing it from the kernel buffer.</li>
+  <li>Look for <code>\n</code> in the peeked bytes.</li>
+  <li>Actually <code>recv()</code> exactly up to and including the newline. Anything after it stays in the kernel buffer for the next call.</li>
+</ol>
+<p>The function is therefore stateless and costs about two system calls per line. Its return value includes the <code>\n</code>, so an empty line (return value 1) can be told apart from an orderly close (return value 0). A test that sent <code>hel</code> / <code>lo\nwor</code> / <code>ld\n\nlast\n</code> in separate writes produced exactly four lines on the server, including the empty one.</p>
+
+<h3>3.4 Two-layer logging <span class="zh">雙層 debug log</span></h3>
+<pre>#ifdef ENABLE_DEBUG                    <span class="c">/* compile-time switch: make DEBUG=1 */</span>
+#define LOG_D(...) log_write(LOG_DEBUG, __FILE__, __LINE__, __VA_ARGS__)
+#else
+#define LOG_D(...) ((void)0)           <span class="c">/* the call and its strings vanish */</span>
+#endif
+<span class="c">/* run-time switch: if (level &gt; g_log_level) return;  set by LOG_LEVEL or -v */</span></pre>
+<p>Without <code>DEBUG=1</code>, the preprocessor removes every <code>LOG_D</code> call before compilation, so neither the code nor its format strings exist in the binary (<code>strings</code> finds 0 matches, and 1 after <code>make DEBUG=1</code>, Figure 6). Even in a debug build, messages appear only when the run-time level is 2. Each line has the format <code>[time][level][pid][file:line]</code>, and the PID is essential when many children log at once. Each line is written with a single <code>write(2)</code>, so lines from concurrent processes never interleave. The Makefile also stores the current <code>CFLAGS</code> in a <code>.cflags</code> file, so toggling <code>DEBUG</code> triggers a rebuild even when no source file has changed.</p>
+
+<figure>
+  <img src="../screenshots/d2-log-levels.png" alt="debug log output">
+  <figcaption><b>Figure 5.</b> Debug build with <code>LOG_LEVEL=2</code>: the server log shows the ciphertext received (<code>HFKR#kl</code>), the decrypted command, the plaintext reply and the ciphertext sent (<code>RN#kl</code>), each tagged with the child PID (721).</figcaption>
+</figure>
+
+<figure>
+  <img src="../screenshots/d3-strings-debug.png" alt="strings check">
+  <figcaption><b>Figure 6.</b> The compile-time switch really removes code: the debug string appears 0 times after <code>make</code> and once after <code>make DEBUG=1</code>.</figcaption>
+</figure>
+
+<h3>3.5 Caesar cipher <span class="zh">凱薩加密</span></h3>
+<pre>encrypt: c' = 32 + ((c - 32 + k) mod 95)          decrypt: c = 32 + ((c' - 32 - k + 95) mod 95)
+
+unsigned char c = (unsigned char)*s;          <span class="c">/* UTF-8 bytes are negative as signed char */</span>
+if (c &lt; 32 || c &gt; 126) continue;              <span class="c">/* \n, \r and UTF-8 are left untouched */</span>
+*s = (char)(32 + (c - 32 + shift) % 95);      <span class="c">/* shift already normalised to 0..94 */</span></pre>
+<p>The cipher shifts all 95 printable ASCII characters, including spaces and punctuation, so the structure of <code>key=value;</code> replies is less obvious than with a letters-only cipher. Two C pitfalls are handled explicitly:</p>
+<ul>
+  <li>The <code>%</code> operator keeps the sign of the dividend (<code>-1 % 95 == -1</code>). The key is therefore normalised with <code>((k % 95) + 95) % 95</code>, and decryption is implemented as a forward shift of <code>95 − k</code>.</li>
+  <li><code>char</code> is signed on x86, so every byte is cast to <code>unsigned char</code> before the range check.</li>
+</ul>
+<p>A unit test covering keys −200 to 200 confirmed, for every key, that the ciphertext stays in range (so it never produces <code>\n</code>), that the mapping is one-to-one and that decryption restores the input.</p>
+
+<div class="zh-summary"><b>中文摘要</b>　fork 複製的是 fd 表，socket 有參考計數，所以父行程要關 <code>connfd</code>、子行程要關 <code>listenfd</code>，否則連線無法關閉或 port 被佔用。<code>libutil.so</code> 以 <code>-fPIC -shared</code> 編譯、以 rpath <code>$ORIGIN/../lib</code> 載入。<code>recv_line</code> 用 <code>MSG_PEEK</code> 只取到 <code>\n</code> 為止，不需保存狀態。log 分編譯期（<code>#ifdef</code> 直接移除程式碼）與執行期（<code>LOG_LEVEL</code>）兩層。凱薩加密處理負數取模與 signed char 兩個陷阱，並以 401 個金鑰的單元測試驗證。</div>
+
+<!-- ============================== 4 ============================== -->
+<h2>4. Concurrency Evidence <span class="zh">併發證明</span></h2>
+
+<p><code>scripts/stress.sh</code> starts 12 clients at once. Each client sends <code>SYSINFO</code>, prints the reply, and keeps the connection open for 15 seconds (<code>--hold 15</code>), which leaves a window in which all connections exist at the same time. The script then collects four independent kinds of evidence and checks them automatically.</p>
+
+<div class="pair">
+  <figure>
+    <img src="../screenshots/a1-stress-ps.png" alt="ps output">
+    <figcaption><b>Figure 7.</b> <code>ps --ppid</code>: 12 child processes of server 915.</figcaption>
+  </figure>
+  <figure>
+    <img src="../screenshots/a3-stress-result.png" alt="stress result">
+    <figcaption><b>Figure 8.</b> All checks pass; 15.0 s in total instead of 12 × 15 = 180 s.</figcaption>
+  </figure>
+</div>
+
+<figure>
+  <img src="../screenshots/a2-stress-ss.png" alt="ss output" style="max-width: 90%">
+  <figcaption><b>Figure 9.</b> <code>ss -tn state established</code>: 12 established connections to port 9000, each from a different ephemeral port.</figcaption>
+</figure>
+
+<table>
+  <colgroup><col style="width: 50%"><col style="width: 17%"><col></colgroup>
+  <tr><th>Evidence</th><th>Source</th><th>Result</th></tr>
+  <tr><td>Child processes alive at the same time</td><td><code>ps --ppid</code></td><td class="ok">12</td></tr>
+  <tr><td>ESTABLISHED connections</td><td><code>ss -tn</code></td><td class="ok">12</td></tr>
+  <tr><td>Distinct child PIDs in the server log</td><td>server log</td><td class="ok">12</td></tr>
+  <tr><td>Distinct <code>child_pid</code> values in the replies (same <code>server_pid</code>)</td><td>client output</td><td class="ok">12</td></tr>
+  <tr><td>Total elapsed time</td><td>script timer</td><td class="ok">15.0 s (vs. 180 s if served one by one)</td></tr>
+  <tr><td>Children left after all clients exit (robust)</td><td><code>ps</code></td><td class="ok">0</td></tr>
+</table>
+
+<p>The same test with 50 clients also passed in 3 seconds, even though the <code>listen()</code> backlog is only 16. The backlog limits connections that have completed the handshake but have <i>not yet been accepted</i>, not the number of clients served at once. Because the parent accepts and forks within microseconds, the queue never fills.</p>
+
+<div class="zh-summary"><b>中文摘要</b>　壓測腳本同時啟動 12 個 client，各保持連線 15 秒。<code>ps</code> 看到 12 個子行程、<code>ss</code> 看到 12 條連線、log 與回覆中各有 12 個不同的子行程 pid，總耗時 15.0 秒（逐一服務需 180 秒）。加測 50 個 client 亦通過：backlog 16 限制的是「尚未被 accept 的連線」，不是同時服務數。</div>
+
+<!-- ============================== 5 ============================== -->
+<h2>5. Robustness: naive vs. robust <span class="zh">強健性對照</span></h2>
+
+<p>The same <code>server.c</code> is compiled twice. <code>server_robust</code> adds <code>-DROBUST</code>, and the robustness code is wrapped in <code>#ifdef ROBUST</code>, so the naive binary does not contain it at all (verified with <code>nm</code>). The two variants differ only in the mechanism under test, which keeps the comparison controlled. <code>scripts/demo_robust.sh</code> reproduces all three cases.</p>
+
+<table>
+  <tr><th></th><th>Problem</th><th>naive</th><th>robust</th></tr>
+  <tr><td>R1</td><td>Zombie processes</td><td class="bad">5 × <code>&lt;defunct&gt;</code> after 5 clients</td><td class="ok">0: <code>SIGCHLD</code> handler reaps all</td></tr>
+  <tr><td>R2</td><td>Writing to a reset connection</td><td class="bad">Child killed by SIGPIPE (exit code 13), no log</td><td class="ok"><code>EPIPE</code> logged; clean exit</td></tr>
+  <tr><td>R3</td><td>Idle client</td><td class="bad">Child blocked in <code>recv()</code> forever</td><td class="ok">Closed after the timeout (<code>-t 3</code>)</td></tr>
+</table>
+
+<h3>5.1 R1 — Zombie processes <span class="zh">殭屍行程</span></h3>
+<p>When a child exits, the kernel keeps its PID and exit status until the parent collects them with <code>wait()</code>. The naive parent never waits, so every finished child remains as a zombie that holds a PID slot. Once enough zombies accumulate, <code>fork()</code> fails with <code>EAGAIN</code>.</p>
+<pre>static void sigchld_handler(int signo) {
+    int saved_errno = errno;                       <span class="c">/* waitpid may overwrite errno */</span>
+    while (waitpid(-1, NULL, WNOHANG) &gt; 0) ;       <span class="c">/* reap ALL finished children */</span>
+    errno = saved_errno;
+}
+sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;           <span class="c">/* restart the interrupted accept() */</span></pre>
+<p>The handler must loop because standard signals are not queued. If several children exit while the handler is running, only one pending <code>SIGCHLD</code> is recorded. <code>WNOHANG</code> keeps the handler from blocking, and saving <code>errno</code> protects the code that was interrupted. The handler does not log, because the logging code uses functions such as <code>snprintf</code> that are not async-signal-safe. A test in which 15 clients disconnected at the same instant left 0 zombies.</p>
+<div class="pair">
+  <figure><img src="../screenshots/b1-r1-naive-zombies.png" alt="R1 naive"><figcaption><b>Figure 10.</b> naive: five zombies.</figcaption></figure>
+  <figure><img src="../screenshots/b2-r1-robust-reaped.png" alt="R1 robust"><figcaption><b>Figure 11.</b> robust: no children left.</figcaption></figure>
+</div>
+
+<h3>5.2 R2 — SIGPIPE <span class="zh">對已斷線的連線寫入</span></h3>
+<p>Writing to a connection that the peer has already reset raises <code>SIGPIPE</code>, whose default action is to terminate the process. The demo client writes five commands in a single write and closes immediately without reading:</p>
+<ol>
+  <li>Its receive buffer is empty when it closes, so it sends <b>FIN</b>.</li>
+  <li>The server's first reply succeeds, because FIN only means the peer will send no more data. The closed client socket answers this reply with <b>RST</b>.</li>
+  <li>The server's second reply goes to a reset connection and triggers <b>SIGPIPE</b>.</li>
+</ol>
+<p>The naive child dies inside <code>send()</code>: the log stops abruptly with no error and no "disconnected" line. Reading the zombie's exit status from <code>/proc/&lt;pid&gt;/stat</code> gives 13, which is SIGPIPE. The robust server sets <code>SIGPIPE</code> to <code>SIG_IGN</code> (the setting is inherited by every child), so the same <code>send()</code> returns −1 with <code>errno = EPIPE</code> and the child logs the event and exits normally. The demonstration reproduced this in 10 out of 10 runs.</p>
+<p class="note">Design note: <code>send_all()</code> deliberately does not use <code>MSG_NOSIGNAL</code>. The library is shared by both builds, so protecting it there would also protect the naive build and make the comparison impossible.</p>
+<figure><img src="../screenshots/b3-r2-naive-sigpipe.png" alt="R2 naive"><figcaption><b>Figure 12.</b> naive: the log ends after two commands, and the child's exit status is 13 (SIGPIPE).</figcaption></figure>
+<figure><img src="../screenshots/b4-r2-robust-epipe.png" alt="R2 robust"><figcaption><b>Figure 13.</b> robust: "peer gone while sending (Broken pipe)", followed by a normal disconnect.</figcaption></figure>
+
+<h3>5.3 R3 — Idle clients <span class="zh">閒置 client</span></h3>
+<p>A client that connects and never sends anything keeps its child blocked in <code>recv()</code> forever. With many such connections an attacker can exhaust the server's processes, which is the idea behind Slowloris-style attacks. The robust child sets <code>SO_RCVTIMEO</code> on its connection; <code>recv()</code> then returns −1 with <code>EAGAIN</code> after the configured idle time, and the child closes the connection. The timeout applies to each <code>recv()</code> call rather than to the whole session, so a client that sent a command every 1.5 s under <code>-t 2</code> was never disconnected.</p>
+<figure><img src="../screenshots/b5-r3-naive-blocked.png" alt="R3 naive" style="max-width: 82%"><figcaption><b>Figure 14.</b> naive: the child is still blocked (state <code>S+</code>) 5 s later and never ends; <code>-t</code> is ignored.</figcaption></figure>
+<figure><img src="../screenshots/b6-r3-robust-timeout.png" alt="R3 robust" style="max-width: 82%"><figcaption><b>Figure 15.</b> robust: "idle for 3 s, closing (R3)", after which the child has exited and been reaped.</figcaption></figure>
+
+<p class="note">Also present in both builds (not part of the comparison): <code>SO_REUSEADDR</code> so the server can restart while old connections are in <code>TIME_WAIT</code> (R5), and <code>EINTR</code> retries in <code>accept</code>, <code>recv_line</code> and <code>send_all</code> (R6). <code>SA_RESTART</code> alone is not sufficient, because socket calls with a timeout are never restarted automatically.</p>
+
+<div class="zh-summary"><b>中文摘要</b>　同一份原始碼以 <code>-DROBUST</code> 編出兩版。R1：SIGCHLD handler 以迴圈 <code>waitpid(WNOHANG)</code> 回收，因為標準信號不排隊；naive 版留下 5 個殭屍，robust 版為 0。R2：client 先送 FIN，server 第一次寫入引發 RST，第二次寫入觸發 SIGPIPE；naive 子行程被信號 13 殺死且無 log，robust 版忽略 SIGPIPE、收到 EPIPE 後正常結束（10/10 次重現）。R3：<code>SO_RCVTIMEO</code> 讓閒置連線在逾時後被關閉，naive 版則永久阻塞。</div>
+
+<!-- ============================== 6 ============================== -->
+<h2>6. Packet Capture and Analysis <span class="zh">封包擷取與分析</span></h2>
+
+<p><code>scripts/capture.sh</code> records three scenarios with <code>tcpdump</code>: encrypted traffic (k = 3), plaintext traffic (k = 0) for comparison, and a FIN-versus-RST teardown. Capturing normally requires root (<code>CAP_NET_RAW</code>). The script instead runs the server, the clients and tcpdump inside an unprivileged <b>user + network namespace</b> (<code>unshare -rn</code>), where the user acts as root for that private loopback only. No privileges are raised, and no other traffic is captured. A private <b>UTS namespace</b> is also used to replace the machine's hostname with the label <code>REDACTED-HOSTNAME</code>, so the published captures contain no real hostname while the packets themselves are unmodified.</p>
+
+<h3>6.1 Three-way handshake <span class="zh">三向交握</span></h3>
+<figure><img src="../screenshots/c1-handshake.png" alt="handshake"><figcaption><b>Figure 16.</b> SYN → SYN-ACK → ACK for stream 0. The SYN carries MSS 65495 (loopback MTU 65536 minus headers) and window scale 128.</figcaption></figure>
+<p>The handshake is completed by the <b>kernel</b> as soon as the socket is in the listening state, before <code>accept()</code> returns. A stage-1 experiment showed this directly. While the iterative server was busy with another client, a second client's <code>connect()</code> succeeded and its data waited in the kernel buffer. The server read that data later, even though the client had already been killed.</p>
+
+<h3>6.2 Ciphertext vs. plaintext <span class="zh">密文與明文</span></h3>
+<figure><img src="../screenshots/c2-payload-cipher.png" alt="payload"><figcaption><b>Figure 17.</b> The first data segment (PSH, ACK, 17 bytes): the payload is <code>HFKR#khoor#zruog\n</code>, the ciphertext of <code>ECHO hello world</code>.</figcaption></figure>
+<figure><img src="../screenshots/c3-follow-stream-cipher.png" alt="follow cipher"><figcaption><b>Figure 18.</b> Follow TCP Stream, encrypted (k = 3): <code>V\VLQIR</code> (SYSINFO) and an unreadable reply.</figcaption></figure>
+<figure><img src="../screenshots/c4-follow-stream-plain.png" alt="follow plain"><figcaption><b>Figure 19.</b> The same stream without encryption (k = 0): the command and the full system information are readable by anyone who can capture the traffic.</figcaption></figure>
+<p>Although Figure 18 looks unreadable, its structure leaks. Every reply starts with <code>RN#</code>, and <code>@</code> and <code>&gt;</code> alternate regularly, revealing the pattern <code>key=value;</code>. Section 7 shows how this breaks the cipher.</p>
+
+<h3>6.3 Connection teardown: FIN vs. RST <span class="zh">斷線</span></h3>
+<figure><div class="crop" style="height: 72mm"><img src="../screenshots/c5-fin.png" alt="FIN"></div><figcaption><b>Figure 20.</b> Normal close of the ECHO connection: the client sends FIN first (active close), the server answers with FIN, and the client sends the final ACK and enters TIME_WAIT.</figcaption></figure>
+<figure>
+  <div class="crop" style="height: 28mm"><img src="../screenshots/c6b-fin-vs-rst.png" alt="FIN after QUIT"></div>
+  <figcaption><b>Figure 21.</b> <code>QUIT</code> (stream 0 of <code>capture_rst.pcap</code>): here the <b>server</b> closes first with FIN (packet 8), so TIME_WAIT is on the server side, which is why the server sets <code>SO_REUSEADDR</code>.</figcaption>
+</figure>
+<figure>
+  <div class="crop" style="height: 28mm"><img src="../screenshots/c6-rst.png" alt="RST"></div>
+  <figcaption><b>Figure 22.</b> <code>QUIT</code> followed by one more line (packet 16, Len = 11) that the server never reads: it closes with <b>RST</b> (packet 20, red row).</figcaption>
+</figure>
+<p>Linux sends RST instead of FIN when a socket is closed while unread data remains in its receive buffer (RFC 1122 §4.2.2.13). The RST tells the peer that some of its data was discarded. This is the mirror image of R2, in which the <i>client</i> closed with pending data and the server's later write raised SIGPIPE.</p>
+
+<div class="zh-summary"><b>中文摘要</b>　擷取腳本在無特權的使用者＋網路命名空間中執行，不需 sudo；並以 UTS 命名空間把主機名稱換成標籤。封包顯示：三向交握由核心在 <code>listen</code> 後完成；加密版 payload 為 <code>HFKR#khoor#zruog</code>，明文版則直接外洩指令與系統資訊；但密文仍洩漏結構（<code>RN#</code> 開頭、<code>@</code>／<code>&gt;</code> 交替）。正常斷線為 FIN，關閉時若接收緩衝區仍有未讀資料則送 RST。</div>
+
+<!-- ============================== 7 ============================== -->
+<h2>7. Security Discussion <span class="zh">安全性討論</span></h2>
+
+<p>The Caesar cipher in this project is a demonstration that "encrypted traffic is unreadable on the wire". It is <b>not</b> a security mechanism:</p>
+<table>
+  <tr><th>Weakness</th><th>Explanation</th><th>Concrete example in this project</th></tr>
+  <tr><td>Tiny key space</td><td>Only 95 keys, one of which (k = 0) is plaintext</td><td>Trying k = 1…94 on <code>HFKR#khoor</code> reveals <code>ECHO hello</code> at k = 3</td></tr>
+  <tr><td>Known plaintext</td><td>A single plaintext–ciphertext pair reveals the key</td><td>Every reply starts with <code>OK </code>; ciphertext <code>RN#</code> gives <code>'R' − 'O' = 3</code></td></tr>
+  <tr><td>Frequency analysis</td><td>Each character always maps to the same character</td><td>The most common symbol <code>#</code> is likely the space, and <code>'#' − ' ' = 3</code></td></tr>
+  <tr><td>Structure leakage</td><td>Length and repeated patterns are preserved</td><td><code>@</code> and <code>&gt;</code> expose the <code>key=value;</code> layout of SYSINFO</td></tr>
+  <tr><td>No integrity</td><td>Modified ciphertext goes undetected</td><td>A man-in-the-middle can alter commands character by character</td></tr>
+  <tr><td>No key exchange</td><td>Both sides must agree on <code>k</code> in advance</td><td><code>-k</code> is typed manually on both sides</td></tr>
+  <tr><td>Partial coverage</td><td>Bytes outside 32–126 are not encrypted</td><td>Chinese (UTF-8) text in <code>ECHO</code> crosses the network in plaintext</td></tr>
+</table>
+<p>Even the published captures show this. Without redaction, the encrypted hostname in Figure 18 could have been recovered by simply shifting it back by 3. A real system should use <b>TLS</b>: an ephemeral key exchange such as ECDHE agrees on a fresh key over an insecure network, an authenticated cipher such as AES-GCM or ChaCha20-Poly1305 provides both confidentiality and integrity, and certificates authenticate the server.</p>
+<p>Other security-relevant choices in the implementation:</p>
+<ul>
+  <li>All buffer operations take explicit lengths, and <code>recv_line</code> rejects lines over 1024 bytes (<code>EMSGSIZE</code>), so oversized input cannot overflow a buffer.</li>
+  <li>The idle timeout (R3) limits resource exhaustion by idle connections.</li>
+  <li>Sensitive information such as the hostname and the shell prompt is redacted in all published material.</li>
+</ul>
+
+<div class="zh-summary"><b>中文摘要</b>　凱薩加密只用於示範，不具安全性：金鑰僅 95 種、可由已知明文（回覆必以 <code>OK </code> 開頭）立即算出 k=3、保留字元頻率與結構、沒有完整性保護、無法安全交換金鑰，且 UTF-8 中文不會被加密。實務應使用 TLS（ECDHE 金鑰交換、AES-GCM 等認證加密、憑證驗證身分）。</div>
+
+<!-- ============================== 8 ============================== -->
+<h2>8. Testing Summary <span class="zh">測試總結</span></h2>
+
+<p>Every stage was compiled with <code>-Wall -Wextra</code> and produced no warnings in either build. Every stage was also tested before it was committed.</p>
+<table>
+  <tr><th>Area</th><th>Tests</th><th>Result</th></tr>
+  <tr><td>Build &amp; linking</td><td><code>make</code>, <code>make DEBUG=1</code>, <code>ldd</code>, <code>readelf</code> RUNPATH, rebuild on flag change</td><td class="ok">pass</td></tr>
+  <tr><td>Framing</td><td>Fragmented writes, two lines in one write, empty line, 1100-byte line without <code>\n</code>, CRLF input</td><td class="ok">pass</td></tr>
+  <tr><td>Logging</td><td>Levels 0/1/2, <code>-v</code> overrides <code>LOG_LEVEL</code>, invalid level, debug code absent from release build</td><td class="ok">pass</td></tr>
+  <tr><td>Commands</td><td>All 10 SYSINFO fields compared with <code>hostname</code>, <code>uname</code>, <code>/proc/uptime</code>, <code>free -b</code>; ECHO with spaces, symbols and UTF-8; unknown commands; several commands on one connection</td><td class="ok">pass</td></tr>
+  <tr><td>Cipher</td><td>Unit test for keys −200…200 (range, one-to-one mapping, round trip); key mismatch; k = 0 and k = 94; bytes on the wire captured with <code>nc</code></td><td class="ok">pass</td></tr>
+  <tr><td>Concurrency</td><td>12 × 15 s and 50 × 3 s stress tests; 15 simultaneous disconnects</td><td class="ok">pass</td></tr>
+  <tr><td>Robustness</td><td>R1, R2 (10/10 runs), R3; active client not affected by the timeout; <code>-t 0</code></td><td class="ok">pass</td></tr>
+  <tr><td>Error handling</td><td>No server running, invalid IP address, invalid port/key/hold values, <code>ECHO -5</code> (an argument starting with a dash)</td><td class="ok">pass</td></tr>
+</table>
+
+<h3>Problems found during development <span class="zh">開發中遇到的問題</span></h3>
+<ul>
+  <li><b><code>make DEBUG=1</code> did nothing after a normal <code>make</code>.</b> make compares only file timestamps. Fixed with a <code>.cflags</code> stamp file that changes whenever the flags change.</li>
+  <li><b>The first R2 demo produced <code>ECONNRESET</code> instead of SIGPIPE.</b> The bash client wrote the commands in many small writes, so it still had unread replies in its buffer when it closed and sent RST immediately. Writing all commands at once made the client send FIN first, which reproduces SIGPIPE every time.</li>
+  <li><b>The first packet captures were empty</b> (the filter received 20 packets but captured 0). Waiting for tcpdump's "listening on" message was unreliable. Isolating each variable showed that a short delay was needed, and the script now fails loudly when it captures 0 packets.</li>
+  <li><b><code>./client ECHO -5</code> failed.</b> GNU <code>getopt</code> reorders arguments and treated <code>-5</code> as an option. Fixed with a leading <code>+</code> in the option string, which stops option parsing at the first command word.</li>
+</ul>
+
+<div class="zh-summary"><b>中文摘要</b>　所有階段以 <code>-Wall -Wextra</code> 編譯皆無警告，並涵蓋建置、切行、log、指令、加密、併發、強健性與錯誤處理等測試，全部通過。開發中解決的問題包括：make 只看時間戳記（以 <code>.cflags</code> 解決）、R2 示範因多次寫入導致 RST（改為一次寫入）、封包擷取為空（等待時機不可靠）、<code>getopt</code> 重排參數（加上 <code>+</code>）。</div>
+
+<!-- ============================== 9 ============================== -->
+<h2>9. Conclusion <span class="zh">結論</span></h2>
+
+<p>The project delivers a fork-based TCP server that served 12 (and 50) clients concurrently, a shared library loaded through rpath, a newline-framed protocol with two-way Caesar encryption, two-layer logging, and three robustness mechanisms. Each mechanism was demonstrated against a naive build compiled from the same source. Packet captures confirm the TCP handshake, the encrypted payloads, the plaintext leak when encryption is disabled, and the difference between FIN and RST teardown.</p>
+<p>The main lessons concern how much of network programming is decided by the kernel rather than by the application:</p>
+<ul>
+  <li>The handshake completes before <code>accept()</code> returns.</li>
+  <li>TCP has no message boundaries, so the application must define its own.</li>
+  <li>A socket closes only when its last descriptor is closed.</li>
+  <li>Signals are not queued.</li>
+  <li>Unread data turns a FIN into an RST.</li>
+</ul>
+<p>Each robustness problem was invisible during normal operation and appeared only under specific timing. This is why each one was reproduced deliberately rather than assumed to be handled.</p>
+
+<div class="zh-summary"><b>中文摘要</b>　本專案完成 fork 併發 server（12 與 50 個 client 同時服務）、以 rpath 載入的動態函式庫、雙向凱薩加密的換行協定、雙層 log 與三項強健性機制，並以同源 naive 版對照驗證；封包擷取證實交握、密文、明文外洩與 FIN／RST 差異。最大的收穫是理解許多網路行為由核心決定：交握在 <code>accept</code> 前完成、TCP 無訊息邊界、最後一個 fd 關閉才真正斷線、信號不排隊、未讀資料使 FIN 變成 RST。</div>
+
+<!-- ============================== Appendix ============================== -->
+<h2>Appendix: AI Usage Statement <span class="zh">附錄：AI 使用聲明</span></h2>
+
+<p>This project was developed with the assistance of <b>Claude</b> (Anthropic), used through Claude Code.<br>
+本專案在開發過程中使用了 Anthropic 的 <b>Claude</b>（透過 Claude Code）協助。</p>
+
+<h3>Claude's contributions <span class="zh">Claude 負責的部分</span></h3>
+<ul>
+  <li><b>Implementation</b>: all source code, including <code>libutil.so</code>, the server with its robustness mechanisms, the client and the Makefile.<br>程式實作：全部原始碼，包括 <code>libutil.so</code>、server（含強健性機制）、client 與 Makefile。</li>
+  <li><b>Scripts</b>: <code>stress.sh</code>, <code>demo_robust.sh</code> and <code>capture.sh</code>.<br>腳本：壓測、強健性對照、封包擷取腳本。</li>
+  <li><b>Testing and debugging</b>: building and testing every stage in WSL, writing test cases, and diagnosing problems found along the way.<br>測試與除錯：逐階段編譯與測試、撰寫測試案例、排除開發中的問題。</li>
+  <li><b>Documentation</b>: the per-stage development logs, the materials index, the README, the packet analysis and this report.<br>文件：各階段開發紀錄、素材索引、README、封包分析與本報告。</li>
+  <li><b>Version control</b>: commit messages and commits for each stage.<br>版本控制：各階段的 commit。</li>
+</ul>
+
+<h3>My contributions <span class="zh">我負責的部分</span></h3>
+<ul>
+  <li><b>Researching and understanding the concepts</b>: the client–server model, sockets and TCP, <code>fork()</code> and file descriptors, signals and zombie processes, shared libraries, conditional compilation, packet analysis, and why the Caesar cipher is insecure.<br>研究與理解概念：client–server 模型、socket 與 TCP、<code>fork()</code> 與檔案描述符、信號與殭屍行程、動態函式庫、條件編譯、封包分析，以及凱薩加密為何不安全。</li>
+  <li><b>Practising the client–server application</b>: building and running the server and client, operating the scripts, observing the behaviour, and producing the screenshots and demonstration.<br>練習操作 client–server application：編譯並執行 server 與 client、操作各腳本、觀察併發、殭屍行程、SIGPIPE、逾時與封包等現象，並製作截圖與示範。</li>
+</ul>
+
+<h3>Reproducing the results <span class="zh">重現方式</span></h3>
+<pre>git clone https://github.com/GuavaCode233/client-server-application-in-c.git
+cd client-server-application-in-c && make
+./scripts/stress.sh 12 15          <span class="c"># concurrency evidence (Section 4)</span>
+./scripts/demo_robust.sh all       <span class="c"># R1-R3 comparison (Section 5)</span>
+./scripts/capture.sh               <span class="c"># packet captures in docs/capture/ (Section 6)</span></pre>
+
+</body>
+</html>

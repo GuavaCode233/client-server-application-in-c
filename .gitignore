@@ -6,6 +6,10 @@ server/server_robust
 client/client
 .cflags
 
+# 報告的個人資訊（姓名、學號）只放在本機，build.ps1 產生 PDF 時才填入
+docs/report/author.local.json
+docs/report/.build.html
+
 # 封包擷取檔：docs/capture/ 下的示範檔很小（數 KB），是報告素材，所以納入版本控制；
 # 其他位置自行抓的 pcap 不追蹤
 *.pcap

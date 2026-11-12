@@ -13,6 +13,8 @@
 | 封包：加密（k=3） | [`capture/capture.pcap`](capture/capture.pcap)、[`.txt`](capture/capture.txt) | `./scripts/capture.sh` |
 | 封包：不加密（k=0），明文外洩對照 | [`capture/capture_plain.pcap`](capture/capture_plain.pcap)、[`.txt`](capture/capture_plain.txt) | 同上 |
 | 封包：FIN vs. RST 斷線對照 | [`capture/capture_rst.pcap`](capture/capture_rst.pcap)、[`.txt`](capture/capture_rst.txt) | 同上 |
+| 截圖（19 張，A–D 四類） | [`screenshots/`](screenshots/) | 見下方第 2 節；`d1`–`d3` 的 shell 提示字元已遮蔽為 `REDACTED` |
+| **書面報告 PDF**（英文為主、中文為輔） | [`report/report.pdf`](report/report.pdf) | 原始檔 `report/report.html`；在 Windows PowerShell 執行 `.\docs\report\build.ps1`（使用 Edge headless 輸出） |
 
 > `.txt` 檔中的 `results/` 輸出已經去除終端機顏色碼。截圖時請直接在終端機執行腳本，畫面會有顏色。
 
